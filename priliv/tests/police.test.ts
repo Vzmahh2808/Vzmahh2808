@@ -83,3 +83,20 @@ describe("police routing", () => {
     expect(best).toBeLessThan(6);
   });
 });
+
+describe("police at a standstill", () => {
+  it("stops beside a stopped target instead of ramming it", () => {
+    const city = generateCity(new Rng(12), 6);
+    const spec = CAR_SPECS.police;
+    const y = roadCoord(6, 3);
+    const car = makeCar(roadCoord(6, 1) + 10, y, 0);
+    const unit = makeUnit("pursuit");
+    const target = { x: car.x + 30, z: y, vx: 0, vz: 0 };
+    for (let i = 0; i < 60 * 15; i++) {
+      stepCar(car, spec, policeDrive(car, unit, city, target, 1 / 60), 1 / 60);
+    }
+    const d = Math.hypot(car.x - target.x, car.z - target.z);
+    expect(d).toBeLessThan(9);
+    expect(Math.hypot(car.vx, car.vz)).toBeLessThan(1);
+  });
+});

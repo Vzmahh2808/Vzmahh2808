@@ -109,6 +109,14 @@ export function policeDrive(car: CarState, unit: PoliceUnit, layout: CityLayout,
 
   const diff = angleTo(car, aimX, aimZ);
   const fwd = forwardSpeed(car);
+  // Box in a stopped target instead of shoving it along.
+  const targetSpeed = Math.hypot(target.vx, target.vz);
+  if (direct && dist < 8 && targetSpeed < 3) {
+    input.steer = Math.max(-1, Math.min(1, diff * 2.5));
+    input.brake = fwd > 0.5;
+    unit.stuck = 0;
+    return input;
+  }
   input.steer = Math.max(-1, Math.min(1, diff * 2.5));
   const sharp = Math.abs(diff) > 0.6;
   const want = sharp ? Math.min(cruise, 11) : cruise;
