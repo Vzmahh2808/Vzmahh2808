@@ -17,6 +17,7 @@ import {
   MAX_DEPTH,
   SAVE_VERSION,
   Tile,
+  type GameEvent,
   type GameState,
   type GroundItem,
   type Item,
@@ -26,18 +27,12 @@ import {
   type MonsterDef,
   type Player,
   type Point,
+  PLAYER_ID,
 } from "./types";
 
 export const FOV_RADIUS = 8;
 const ALERT_TURNS = 12;
 const LOG_LIMIT = 200;
-
-export interface HitEvent {
-  x: number;
-  y: number;
-  text: string;
-  color: string;
-}
 
 export function xpToNext(level: number): number {
   return 15 * level * (level + 1);
@@ -72,8 +67,8 @@ export class Game {
   state: GameState;
   rng: Rng;
   visible: boolean[] = [];
-  /** Transient combat feedback for the renderer; not persisted. */
-  events: HitEvent[] = [];
+  /** Transient feedback for the renderer and sound; not persisted. */
+  events: GameEvent[] = [];
 
   private constructor(state: GameState) {
     this.state = state;
@@ -171,7 +166,11 @@ export class Game {
   }
 
   private emit(x: number, y: number, text: string, color: string): void {
-    this.events.push({ x, y, text, color });
+    this.events.push({ type: "float", x, y, text, color });
+  }
+
+  private event(ev: GameEvent): void {
+    this.events.push(ev);
   }
 
   // ---------------------------------------------------------------- level building
@@ -272,7 +271,11 @@ export class Game {
       this.endTurn();
       return true;
     }
-    if (!canStep(this.state.map, p.x, p.y, tx, ty)) return false;
+    if (!canStep(this.state.map, p.x, p.y, tx, ty)) {
+      this.event({ type: "blocked" });
+      return false;
+    }
+    this.event({ type: "move", id: PLAYER_ID, from: { x: p.x, y: p.y }, to: { x: tx, y: ty } });
     p.x = tx;
     p.y = ty;
     this.afterStep();
@@ -290,6 +293,7 @@ export class Game {
         this.state.items.splice(this.state.items.indexOf(g), 1);
         this.log(`Вы подбираете ${amount} золота.`, "good");
         this.emit(p.x, p.y, `+${amount}$`, "#ffd32a");
+        this.event({ type: "gold" });
       }
     }
     const rest = this.itemsAt(p.x, p.y);
@@ -318,6 +322,7 @@ export class Game {
         this.state.items.splice(this.state.items.indexOf(g), 1);
         this.state.status = "won";
         this.log("Вы берёте Сердце подземелья. Победа!", "good");
+        this.event({ type: "win" });
         return true;
       }
       if (p.inventory.length >= INVENTORY_LIMIT) {
@@ -327,6 +332,7 @@ export class Game {
       p.inventory.push(g.item);
       this.state.items.splice(this.state.items.indexOf(g), 1);
       this.log(`Вы подбираете: ${itemName(g.item)}.`, "good");
+      this.event({ type: "pickup" });
       took++;
     }
     if (took === 0) return false;
@@ -342,6 +348,7 @@ export class Game {
       return false;
     }
     this.state.depth++;
+    this.event({ type: "descend" });
     this.buildLevel();
     this.log(`Вы спускаетесь на этаж ${this.state.depth}.`, "system");
     if (this.state.depth === MAX_DEPTH) this.log("Воздух дрожит. Владыка подземелья где-то рядом.", "warn");
@@ -374,11 +381,13 @@ export class Game {
         return this.equip(index, def);
       case "potion":
         p.inventory.splice(index, 1);
+        this.event({ type: "potion" });
         this.drink(def);
         this.endTurn();
         return true;
       case "scroll":
         p.inventory.splice(index, 1);
+        this.event({ type: "scroll", effect: def.effect });
         this.read(def);
         this.endTurn();
         return true;
@@ -400,6 +409,7 @@ export class Game {
       p.armor = item;
     }
     this.log(`Вы надеваете: ${def.name}.`, "good");
+    this.event({ type: "pickup" });
     this.endTurn();
     return true;
   }
@@ -445,6 +455,7 @@ export class Game {
       case "teleport": {
         const spot = this.randomFreeFloor(false);
         if (spot) {
+          this.event({ type: "teleport", from: { x: p.x, y: p.y }, to: spot });
           p.x = spot.x;
           p.y = spot.y;
           this.refreshFov();
@@ -473,6 +484,7 @@ export class Game {
           break;
         }
         this.log(`Огненный шар накрывает ${targets.length} врагов!`, "warn");
+        this.event({ type: "fire", targets: targets.map((m) => ({ x: m.x, y: m.y })) });
         for (const m of targets) {
           const dmg = this.rng.int(8, 14);
           this.damageMonster(m, dmg, "огонь");
@@ -489,7 +501,9 @@ export class Game {
   private playerAttack(m: Monster): void {
     const def = monsterDef(m.defId);
     const toHit = clamp(this.accuracy() - def.eva, 10, 95);
-    if (!this.rng.chance(toHit / 100)) {
+    const hit = this.rng.chance(toHit / 100);
+    this.event({ type: "attack", id: PLAYER_ID, from: { x: this.player.x, y: this.player.y }, to: { x: m.x, y: m.y }, hit });
+    if (!hit) {
       this.log(`Вы промахиваетесь: ${def.name} уворачивается.`);
       this.emit(m.x, m.y, "мимо", "#a4b0be");
       return;
@@ -505,9 +519,11 @@ export class Game {
     m.hp -= dmg;
     m.alert = ALERT_TURNS;
     this.emit(m.x, m.y, `-${dmg}`, "#ff6b6b");
+    this.event({ type: "damage", id: m.id, x: m.x, y: m.y, amount: dmg, player: false });
     if (m.hp <= 0) {
       this.state.monsters.splice(this.state.monsters.indexOf(m), 1);
       this.player.kills++;
+      this.event({ type: "monsterDeath", x: m.x, y: m.y, glyph: def.glyph, color: def.color });
       this.log(`${cap(def.name)} погибает.`, "good");
       this.gainXp(def.xp);
       if (def.special === "boss") {
@@ -530,6 +546,7 @@ export class Game {
       p.hp = Math.min(p.maxHp, p.hp + gain);
       this.log(`Уровень ${p.level}! Максимальное здоровье +${gain}.`, "good");
       this.emit(p.x, p.y, "LEVEL UP", "#ffd32a");
+      this.event({ type: "levelup" });
     }
   }
 
@@ -537,7 +554,9 @@ export class Game {
     const def = monsterDef(m.defId);
     const p = this.player;
     const toHit = clamp(def.acc - this.evasion(), 10, 95);
-    if (!this.rng.chance(toHit / 100)) {
+    const hit = this.rng.chance(toHit / 100);
+    this.event({ type: "attack", id: m.id, from: { x: m.x, y: m.y }, to: { x: p.x, y: p.y }, hit });
+    if (!hit) {
       this.log(`${cap(def.name)} промахивается.`);
       this.emit(p.x, p.y, "мимо", "#a4b0be");
       return;
@@ -551,6 +570,7 @@ export class Game {
     }
     p.hp -= dmg;
     this.emit(p.x, p.y, `-${dmg}`, "#ff4d6d");
+    this.event({ type: "damage", id: PLAYER_ID, x: p.x, y: p.y, amount: dmg, player: true });
     this.log(`${cap(def.name)} атакует вас: ${dmg} урона.`, "bad");
     if (def.special === "poison" && this.rng.chance(0.3) && p.poison === 0) {
       p.poison = 5;
@@ -567,6 +587,7 @@ export class Game {
     p.hp = 0;
     this.state.status = "dead";
     this.state.deathCause = cause;
+    this.event({ type: "death" });
     this.log(`Вы погибли на этаже ${this.state.depth}. Причина: ${cause}.`, "bad");
   }
 
@@ -660,8 +681,7 @@ export class Game {
       }
     }
     if (!best) return false;
-    m.x = best.x;
-    m.y = best.y;
+    this.moveMonster(m, best);
     return true;
   }
 
@@ -680,8 +700,7 @@ export class Game {
       }
     }
     if (best) {
-      m.x = best.x;
-      m.y = best.y;
+      this.moveMonster(m, best);
     } else if (chebyshev(m, this.player) === 1) {
       this.monsterAttack(m);
     }
@@ -692,9 +711,16 @@ export class Game {
     const nx = m.x + d.x;
     const ny = m.y + d.y;
     if (canStep(this.state.map, m.x, m.y, nx, ny) && this.isFree(nx, ny)) {
-      m.x = nx;
-      m.y = ny;
+      this.moveMonster(m, { x: nx, y: ny });
     }
+  }
+
+  private moveMonster(m: Monster, to: Point): void {
+    if (this.isVisible(m.x, m.y) || this.isVisible(to.x, to.y)) {
+      this.event({ type: "move", id: m.id, from: { x: m.x, y: m.y }, to });
+    }
+    m.x = to.x;
+    m.y = to.y;
   }
 
   // ---------------------------------------------------------------- travel helpers (used by the UI)

@@ -2,8 +2,9 @@ import { Game, itemDescription, itemName, scoreOf, xpToNext } from "./game/game"
 import { itemDef, monsterDef } from "./game/data";
 import { randomSeed } from "./game/rng";
 import { clearSave, loadGame, loadScores, recordScore, saveGame, type ScoreEntry } from "./game/save";
-import { INVENTORY_LIMIT, type Point } from "./game/types";
+import { INVENTORY_LIMIT, PLAYER_ID, type Point } from "./game/types";
 import { Renderer } from "./ui/renderer";
+import { Sound } from "./ui/sound";
 
 type Mode = "title" | "play" | "inventory" | "help" | "scores" | "over";
 
@@ -20,6 +21,7 @@ const logEl = $<HTMLDivElement>("#log");
 const lookEl = $<HTMLSpanElement>("#look");
 
 const renderer = new Renderer(canvas);
+const sound = new Sound();
 let game: Game | null = null;
 let mode: Mode = "title";
 let travel: Point[] = [];
@@ -119,7 +121,10 @@ function escapeHtml(s: string): string {
 
 function flushEvents(): void {
   if (!game) return;
-  for (const e of game.events) renderer.addFloat(e.x, e.y, e.text, e.color);
+  for (const e of game.events) {
+    renderer.handle(e);
+    sound.handle(e, PLAYER_ID);
+  }
   game.events = [];
 }
 
@@ -156,12 +161,14 @@ function finishGame(): void {
     date: new Date().toISOString().slice(0, 10),
   };
   const { rank } = recordScore(entry);
-  setTimeout(() => showGameOver(entry, rank), 600);
+  setTimeout(() => showGameOver(entry, rank), 1300);
 }
 
 function startNewGame(): void {
   game = Game.newGame(randomSeed());
   scoreRecorded = false;
+  renderer.reset();
+  renderer.clearFade();
   saveGame(game.snapshot());
   enterPlay();
 }
@@ -176,6 +183,8 @@ function continueGame(): boolean {
     return false;
   }
   scoreRecorded = false;
+  renderer.reset();
+  renderer.clearFade();
   game.log("Игра продолжена.", "system");
   enterPlay();
   return true;
@@ -289,6 +298,7 @@ function showHelp(): void {
       <kbd>&gt;</kbd><span>Спуститься по лестнице</span>
       <kbd>O</kbd><span>Автоисследование этажа</span>
       <kbd>Клик</kbd><span>Идти к клетке на карте</span>
+      <kbd>M</kbd><span>Включить или выключить звук</span>
       <kbd>Esc</kbd><span>Меню</span>
     </div>
     <h2 style="margin-top:16px">Обозначения</h2>
@@ -433,9 +443,28 @@ const DIR_KEYS: Record<string, [number, number]> = {
   Home: [-1, -1], PageUp: [1, -1], End: [-1, 1], PageDown: [1, 1],
 };
 
+window.addEventListener("pointerdown", () => sound.unlock(), { passive: true });
+window.addEventListener("keydown", () => sound.unlock());
+
+function updateMuteButton(): void {
+  const btn = $("#btn-sound");
+  btn.textContent = sound.muted ? "🔇" : "🔊";
+  btn.title = sound.muted ? "Включить звук (M)" : "Выключить звук (M)";
+}
+$("#btn-sound").addEventListener("click", () => {
+  sound.toggleMute();
+  updateMuteButton();
+});
+updateMuteButton();
+
 window.addEventListener("keydown", (ev) => {
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
   const key = ev.key;
+  if ((key === "m" || key === "M" || key === "ь") && mode !== "inventory") {
+    sound.toggleMute();
+    updateMuteButton();
+    return;
+  }
 
   if (mode === "title") {
     if (key === "n" || key === "N" || key === "т") startNewGame();
@@ -569,5 +598,10 @@ $("#btn-help").addEventListener("click", () => mode === "play" && showHelp());
 $("#btn-menu").addEventListener("click", () => (mode === "play" ? showTitle() : mode === "title" ? undefined : handleMenu("back")));
 
 // ---------------------------------------------------------------- boot
+
+// Debug hook for automated play-testing: open the page with ?debug.
+if (location.search.includes("debug")) {
+  (window as unknown as { __dd: unknown }).__dd = { game: () => game, mode: () => mode };
+}
 
 showTitle();

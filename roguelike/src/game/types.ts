@@ -144,6 +144,27 @@ export interface GameState {
   deathCause: string;
 }
 
+/** Entity id used for the player in movement/attack events. */
+export const PLAYER_ID = -1;
+
+export type GameEvent =
+  | { type: "move"; id: number; from: Point; to: Point }
+  | { type: "attack"; id: number; from: Point; to: Point; hit: boolean }
+  | { type: "damage"; id: number; x: number; y: number; amount: number; player: boolean }
+  | { type: "float"; x: number; y: number; text: string; color: string }
+  | { type: "monsterDeath"; x: number; y: number; glyph: string; color: string }
+  | { type: "gold" }
+  | { type: "pickup" }
+  | { type: "potion" }
+  | { type: "scroll"; effect: string }
+  | { type: "fire"; targets: Point[] }
+  | { type: "teleport"; from: Point; to: Point }
+  | { type: "levelup" }
+  | { type: "descend" }
+  | { type: "death" }
+  | { type: "win" }
+  | { type: "blocked" };
+
 export interface FloatingText {
   x: number;
   y: number;
