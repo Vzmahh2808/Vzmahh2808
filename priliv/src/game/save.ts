@@ -23,7 +23,7 @@ export interface SaveData {
   clock: number;
   /** Graphics preset; "auto" picks low on touch devices. */
   quality: "auto" | "high" | "low";
-  stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number };
+  stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number; racesWon: number };
 }
 
 export interface KeyValueStore {
@@ -44,7 +44,7 @@ export function freshSave(): SaveData {
     radio: 0,
     clock: 17,
     quality: "auto",
-    stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0 },
+    stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0, racesWon: 0 },
   };
 }
 
@@ -93,6 +93,7 @@ export function parseSave(raw: string | null): SaveData | null {
       arrests: num(data.stats?.arrests, 0),
       deaths: num(data.stats?.deaths, 0),
       carsDestroyed: num(data.stats?.carsDestroyed, 0),
+      racesWon: num(data.stats?.racesWon, 0),
     },
   };
 }
