@@ -2,7 +2,6 @@ name: roguelike
 
 on:
   push:
-    branches: [main]
     paths: ["roguelike/**", ".github/workflows/roguelike.yml"]
   pull_request:
     paths: ["roguelike/**", ".github/workflows/roguelike.yml"]
@@ -27,13 +26,13 @@ jobs:
       - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         with:
           path: roguelike/dist
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
       pages: write
