@@ -43,8 +43,12 @@ export const CAR_SPECS: Record<string, CarSpec> = {
   sedan: { maxSpeed: 42, maxReverse: 10, accel: 9, brake: 22, drag: 0.6, steerMax: 0.55, wheelBase: 2.7, grip: 6, handbrakeGrip: 1.2, mass: 1300, length: 4.4, width: 1.9 },
   sport: { maxSpeed: 58, maxReverse: 12, accel: 14, brake: 26, drag: 0.5, steerMax: 0.5, wheelBase: 2.5, grip: 7, handbrakeGrip: 1.0, mass: 1200, length: 4.2, width: 1.9 },
   van: { maxSpeed: 32, maxReverse: 8, accel: 6, brake: 18, drag: 0.8, steerMax: 0.6, wheelBase: 3.2, grip: 5, handbrakeGrip: 1.5, mass: 2000, length: 5.2, width: 2.1 },
+  police: { maxSpeed: 52, maxReverse: 12, accel: 13, brake: 26, drag: 0.55, steerMax: 0.55, wheelBase: 2.7, grip: 6.5, handbrakeGrip: 1.2, mass: 1500, length: 4.6, width: 1.95 },
   pickup: { maxSpeed: 38, maxReverse: 9, accel: 8, brake: 20, drag: 0.7, steerMax: 0.58, wheelBase: 3.0, grip: 5.5, handbrakeGrip: 1.3, mass: 1700, length: 5.0, width: 2.0 },
 };
+
+/** Kinds that appear as ordinary traffic and parked cars. */
+export const CIVILIAN_KINDS = ["sedan", "sport", "van", "pickup"] as const;
 
 export function makeCar(x: number, z: number, heading: number): CarState {
   return { x, z, heading, vx: 0, vz: 0, steer: 0, wheelSpin: 0, health: 100, burning: false, fire: 0, wrecked: false };

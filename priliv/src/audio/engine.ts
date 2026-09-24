@@ -9,6 +9,8 @@ export class CarAudio {
   private hornOsc: OscillatorNode | null = null;
   private hornGain: GainNode | null = null;
   private screechGain: GainNode | null = null;
+  private sirenOsc: OscillatorNode | null = null;
+  private sirenGain: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   muted = false;
 
@@ -66,6 +68,46 @@ export class CarAudio {
     this.screechGain.gain.value = 0;
     src.connect(bp).connect(this.screechGain).connect(this.master);
     src.start();
+
+    this.sirenOsc = ctx.createOscillator();
+    this.sirenOsc.type = "sawtooth";
+    this.sirenOsc.frequency.value = 800;
+    const sirenFilter = ctx.createBiquadFilter();
+    sirenFilter.type = "lowpass";
+    sirenFilter.frequency.value = 2200;
+    this.sirenGain = ctx.createGain();
+    this.sirenGain.gain.value = 0;
+    this.sirenOsc.connect(sirenFilter).connect(this.sirenGain).connect(this.master);
+    this.sirenOsc.start();
+  }
+
+  /** distance to the nearest active police car, or Infinity for silence. */
+  siren(distance: number, time: number): void {
+    if (!this.sirenOsc || !this.sirenGain || !this.ctx) return;
+    // Wail: a slow sweep between two pitches.
+    const f = 720 + 480 * (0.5 + 0.5 * Math.sin(time * Math.PI * 1.25));
+    this.sirenOsc.frequency.setTargetAtTime(f, this.ctx.currentTime, 0.03);
+    const vol = this.muted || !isFinite(distance) ? 0 : 0.09 * Math.max(0, 1 - distance / 170);
+    this.sirenGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.1);
+  }
+
+  /** Short rising chime when the wanted level goes up. */
+  alert(): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const ctx = this.ctx;
+    [520, 780].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const t0 = ctx.currentTime + i * 0.12;
+      o.type = "triangle";
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+      o.connect(g).connect(this.master!);
+      o.start(t0);
+      o.stop(t0 + 0.3);
+    });
   }
 
   /** slip in m/s of sideways sliding; 0 silences the screech. */

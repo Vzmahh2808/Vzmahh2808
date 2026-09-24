@@ -1,6 +1,6 @@
 import type { Rng } from "../core/rng";
 import { LANE_WIDTH, roadCoord, type CityLayout } from "../world/city";
-import { CAR_SPECS, forwardSpeed, makeCar, type CarInput, type CarState } from "./carPhysics";
+import { CIVILIAN_KINDS, forwardSpeed, makeCar, type CarInput, type CarState } from "./carPhysics";
 
 export interface Obstacle {
   x: number;
@@ -60,7 +60,7 @@ function nextIntersection(rng: Rng, n: number, a: TrafficCar["a"], b: TrafficCar
 
 export function spawnTraffic(rng: Rng, layout: CityLayout, count: number, colors: number[]): TrafficCar[] {
   const cars: TrafficCar[] = [];
-  const kinds = Object.keys(CAR_SPECS);
+  const kinds = [...CIVILIAN_KINDS];
   for (let i = 0; i < count; i++) {
     const a = { ix: rng.int(0, layout.n), iz: rng.int(0, layout.n) };
     const b = nextIntersection(rng, layout.n, { ix: -99, iz: -99 }, a);

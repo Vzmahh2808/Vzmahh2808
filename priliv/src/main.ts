@@ -1,18 +1,21 @@
 import * as THREE from "three";
 import { Rng } from "./core/rng";
 import { Input } from "./core/input";
-import { clampToCity, generateCity, isOnCarriageway, resolveCircleVsBuildings, surfaceHeight } from "./world/city";
+import { PITCH, ROAD_WIDTH, clampToCity, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
 import { buildCityMeshes } from "./world/cityMesh";
 import { buildWalkGraph } from "./world/sidewalks";
-import { CAR_SPECS, collideCar, forwardSpeed, lateralSpeed, makeCar, separateCars, speedOf, stepCar, type CarInput, type CarState } from "./entities/carPhysics";
+import { CAR_SPECS, CIVILIAN_KINDS, collideCar, forwardSpeed, lateralSpeed, makeCar, separateCars, speedOf, stepCar, type CarInput, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
-import { buildCarVisual, syncCarVisual, type CarVisual } from "./entities/carMesh";
+import { buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
 import { animatePedestrian, buildPedestrian, HAIR, PANTS, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
 import { knockPed, rejoinNetwork, scare, spawnPeds, stepPed, type Ped, type Threat } from "./entities/peds";
 import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
 import { ParticleSystem } from "./fx/particles";
 import { SkidMarks } from "./fx/skids";
 import { Minimap } from "./ui/minimap";
+import { Wanted, type Crime } from "./police/wanted";
+import { lineOfSight, makeUnit, nearestIntersection, policeDrive, type PoliceUnit } from "./police/policeAI";
+import { Helicopter } from "./police/helicopter";
 import { CarAudio } from "./audio/engine";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -76,11 +79,14 @@ interface Vehicle {
   radius: number;
   wreckAge: number;
   rearPrev: [number, number, number, number] | null;
+  police: PoliceUnit | null;
+  /** simTime the player last drove or hit this car; used to blame explosions. */
+  blame: number;
 }
 
 const vehicles: Vehicle[] = [];
 
-function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar | null): Vehicle {
+function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar | null, police: PoliceUnit | null = null): Vehicle {
   const spec = CAR_SPECS[kind];
   const visual = buildCarVisual(kind, spec, color);
   scene.add(visual.group);
@@ -93,6 +99,8 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     radius: spec.length * 0.42,
     wreckAge: 0,
     rearPrev: null,
+    police,
+    blame: -1e9,
   };
   vehicles.push(v);
   return v;
@@ -112,15 +120,267 @@ function recycleAsTraffic(v: Vehicle): void {
   v.visual = buildCarVisual(fresh.kind, spec, fresh.color);
   v.wreckAge = 0;
   v.rearPrev = null;
+  v.police = null;
+  v.blame = -1e9;
   scene.add(v.visual.group);
 }
 
 for (const p of layout.parking) {
   if (rng.chance(0.6)) continue;
-  const kind = rng.pick(Object.keys(CAR_SPECS));
+  const kind = rng.pick(CIVILIAN_KINDS);
   addVehicle(makeCar(p.x, p.z, p.rot), kind, rng.pick(COLORS), null);
 }
 for (const t of spawnTraffic(rng, layout, 45, COLORS)) addVehicle(t.state, t.kind, t.color, t);
+
+// ---------------------------------------------------------------- police
+
+const POLICE_WHITE = 0xf2f4f7;
+const PATROLS = 3;
+const PURSUERS_BY_STARS = [0, 2, 3, 5, 7, 9];
+const wanted = new Wanted();
+const heli = new Helicopter(scene);
+let simTime = 0;
+let policeSpawnTimer = 0;
+let roadblockTimer = 8;
+let bustTimer = 0;
+let banner = { text: "", ttl: 0 };
+
+function addPatrol(): Vehicle | null {
+  const t = spawnTraffic(rng, layout, 1, [POLICE_WHITE])[0];
+  if (!t) return null;
+  t.kind = "police";
+  return addVehicle(t.state, "police", POLICE_WHITE, t, makeUnit("patrol"));
+}
+for (let i = 0; i < PATROLS; i++) addPatrol();
+
+interface Cop {
+  ped: Ped;
+  vis: PedVisual;
+  leaving: boolean;
+}
+const cops: Cop[] = [];
+
+function spawnCop(x: number, z: number): void {
+  if (cops.length >= 6) return;
+  const vis = buildPedestrian(0x1b2d5c, 0x141c33, rng.pick(SKINS), 0x0d0d12);
+  vis.group.traverse((o) => (o.castShadow = false));
+  scene.add(vis.group);
+  const ped: Ped = { id: -1, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading: 0, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0 };
+  cops.push({ ped, vis, leaving: false });
+}
+
+function removeCop(i: number): void {
+  scene.remove(cops[i].vis.group);
+  cops.splice(i, 1);
+}
+
+/** A crewed police car: chasing, blocking the road, or out on patrol with a driver. */
+function isActivePolice(v: Vehicle): boolean {
+  if (!v.police || v === player.vehicle || v.state.wrecked || v.state.burning) return false;
+  return v.police.mode !== "patrol" || v.ai !== null;
+}
+
+/** Does any police unit see the point (x, z)? */
+function policeCanSee(x: number, z: number, carRange = 65): boolean {
+  for (const v of vehicles) {
+    if (!isActivePolice(v)) continue;
+    const d = Math.hypot(v.state.x - x, v.state.z - z);
+    if (d < carRange && lineOfSight(layout, v.state.x, v.state.z, x, z)) return true;
+  }
+  for (const c of cops) {
+    if (c.leaving || c.ped.state === "down" || c.ped.state === "gone") continue;
+    if (Math.hypot(c.ped.x - x, c.ped.z - z) < 35) return true;
+  }
+  return heli.active && heli.distanceTo(x, z) < 90;
+}
+
+function crime(kind: Crime, x: number, z: number, needsWitness: boolean): void {
+  // Minor crimes only count when police see them or a bystander calls it in.
+  if (needsWitness && !policeCanSee(x, z, 80) && !rng.chance(0.4)) return;
+  if (wanted.add(kind)) {
+    audio.alert();
+    starsEl.classList.remove("pulse");
+    void starsEl.offsetWidth;
+    starsEl.classList.add("pulse");
+  }
+}
+
+/** Point a car's traffic AI at the street it is already on. */
+function trafficFor(v: Vehicle): TrafficCar {
+  const s = v.state;
+  const a = nearestIntersection(layout.n, s.x, s.z);
+  const cx = Math.cos(s.heading);
+  const cz = Math.sin(s.heading);
+  let b = Math.abs(cx) > Math.abs(cz) ? { ix: a.ix + Math.sign(cx), iz: a.iz } : { ix: a.ix, iz: a.iz + Math.sign(cz) };
+  if (b.ix < 0 || b.ix > layout.n || b.iz < 0 || b.iz > layout.n || (b.ix === a.ix && b.iz === a.iz)) b = { ix: a.ix === 0 ? 1 : a.ix - 1, iz: a.iz };
+  return { state: s, kind: v.kind, color: POLICE_WHITE, a, b, stunned: 0, input: { throttle: 0, steer: 0, brake: false, handbrake: false } };
+}
+
+/** Wanted level cleared: units go back to patrolling, cops walk off, the helicopter leaves. */
+function standDown(): void {
+  for (const v of vehicles) {
+    if (!v.police || v === player.vehicle || v.state.wrecked) continue;
+    if (v.police.mode === "patrol") continue;
+    v.police.mode = "patrol";
+    v.police.node = null;
+    v.ai = trafficFor(v);
+    v.input = v.ai.input;
+  }
+  for (const c of cops) c.leaving = true;
+  heli.leave();
+  bustTimer = 0;
+}
+
+function spawnPursuer(): void {
+  for (let tries = 0; tries < 20; tries++) {
+    const ix = rng.int(0, layout.n);
+    const iz = rng.int(0, layout.n);
+    const x = roadCoord(layout.n, ix);
+    const z = roadCoord(layout.n, iz);
+    const d = Math.hypot(x - player.x, z - player.z);
+    if (d < 90 || d > 170) continue;
+    const car = makeCar(x, z, Math.atan2(player.z - z, player.x - x));
+    addVehicle(car, "police", POLICE_WHITE, null, makeUnit("pursuit"));
+    return;
+  }
+}
+
+/** Two cruisers parked across the road ahead of the player. */
+function placeRoadblock(): void {
+  const v = player.vehicle;
+  const hx = v ? v.state.vx : Math.cos(player.heading);
+  const hz = v ? v.state.vz : Math.sin(player.heading);
+  if (Math.hypot(hx, hz) < 0.5) return;
+  const alongX = Math.abs(hx) > Math.abs(hz);
+  const lim = layout.half - 10;
+  let x: number;
+  let z: number;
+  if (alongX) {
+    z = roadCoord(layout.n, nearestIntersection(layout.n, player.x, player.z).iz);
+    x = player.x + Math.sign(hx) * 80;
+    // Stay mid-block so the block does not sit inside an intersection.
+    x = Math.round((x - ROAD_WIDTH / 2) / PITCH) * PITCH + PITCH / 2;
+  } else {
+    x = roadCoord(layout.n, nearestIntersection(layout.n, player.x, player.z).ix);
+    z = player.z + Math.sign(hz) * 80;
+    z = Math.round((z - ROAD_WIDTH / 2) / PITCH) * PITCH + PITCH / 2;
+  }
+  if (Math.abs(x) > lim || Math.abs(z) > lim) return;
+  const rot = alongX ? Math.PI / 2 : 0;
+  for (const off of [-2.6, 2.6]) {
+    const cx = alongX ? x : x + off;
+    const cz = alongX ? z + off : z;
+    addVehicle(makeCar(cx, cz, rot + (off > 0 ? Math.PI : 0)), "police", POLICE_WHITE, null, makeUnit("roadblock"));
+  }
+}
+
+function managePolice(dt: number): void {
+  const seen = !player.dead && policeCanSee(player.x, player.z);
+  if (wanted.update(dt, seen)) {
+    standDown();
+    showBanner("Вы оторвались от полиции");
+  }
+  const level = wanted.level;
+  let pursuers = 0;
+  let patrols = 0;
+  for (const v of vehicles) {
+    if (!isActivePolice(v)) continue;
+    if (v.police!.mode === "pursuit") pursuers++;
+    if (v.police!.mode === "patrol") patrols++;
+  }
+  if (level > 0) {
+    // Nearby patrols join the chase first, then reinforcements arrive from afar.
+    for (const v of vehicles) {
+      if (pursuers >= PURSUERS_BY_STARS[level]) break;
+      if (!isActivePolice(v) || v.police!.mode !== "patrol") continue;
+      if (Math.hypot(v.state.x - player.x, v.state.z - player.z) > 200) continue;
+      v.police!.mode = "pursuit";
+      v.ai = null;
+      pursuers++;
+    }
+    policeSpawnTimer -= dt;
+    if (pursuers < PURSUERS_BY_STARS[level] && policeSpawnTimer <= 0) {
+      spawnPursuer();
+      policeSpawnTimer = 2.5;
+    }
+    if (level >= 4 && !heli.active) heli.arrive(player.x, player.z);
+    roadblockTimer -= dt;
+    if (level >= 3 && player.vehicle && roadblockTimer <= 0) {
+      placeRoadblock();
+      roadblockTimer = 22;
+    }
+  } else if (patrols < PATROLS) {
+    policeSpawnTimer -= dt;
+    if (policeSpawnTimer <= 0) {
+      addPatrol();
+      policeSpawnTimer = 5;
+    }
+  }
+
+  // Arrest: stopped next to a cruiser, or grabbed by a cop on foot.
+  let grabbing = false;
+  if (level > 0 && !player.dead) {
+    if (player.vehicle) {
+      if (speedOf(player.vehicle.state) < 2) {
+        for (const v of vehicles) {
+          if (isActivePolice(v) && v.police!.mode !== "patrol" && Math.hypot(v.state.x - player.x, v.state.z - player.z) < 6) grabbing = true;
+        }
+      }
+    } else {
+      for (const c of cops) {
+        if (!c.leaving && c.ped.state !== "down" && Math.hypot(c.ped.x - player.x, c.ped.z - player.z) < 1.3) grabbing = true;
+      }
+    }
+  }
+  bustTimer = grabbing ? bustTimer + dt : Math.max(0, bustTimer - dt * 2);
+  if (bustTimer > 2) arrestPlayer();
+}
+
+function stepCops(dt: number): void {
+  const collide = (x: number, z: number) => resolveCircleVsBuildings(layout, x, z, 0.35);
+  for (let i = cops.length - 1; i >= 0; i--) {
+    const c = cops[i];
+    const p = c.ped;
+    const d = Math.hypot(p.x - player.x, p.z - player.z);
+    if (p.state === "gone" || (c.leaving && d > 70) || d > 200) {
+      removeCop(i);
+      continue;
+    }
+    if (p.state === "down") {
+      stepPed(p, walkGraph, rng, dt, [], collide);
+      continue;
+    }
+    // A cop gives up on foot once the player drives off.
+    if (player.vehicle && speedOf(player.vehicle.state) > 9 && d > 25) c.leaving = true;
+    const away = c.leaving || player.dead > 0;
+    const ang = away ? Math.atan2(p.z - player.z, p.x - player.x) : Math.atan2(player.z - p.z, player.x - p.x);
+    p.heading = ang;
+    const target = away ? 3 : d < 1.1 ? 0 : 6.4;
+    p.speed += (target - p.speed) * Math.min(1, dt * 6);
+    p.x += Math.cos(ang) * p.speed * dt;
+    p.z += Math.sin(ang) * p.speed * dt;
+    const push = collide(p.x, p.z);
+    if (push) {
+      p.x += push.x;
+      p.z += push.z;
+    }
+    for (const v of vehicles) {
+      const dx = p.x - v.state.x;
+      const dz = p.z - v.state.z;
+      const min = v.radius * 0.85 + 0.35;
+      if (dx * dx + dz * dz > min * min) continue;
+      if (speedOf(v.state) > 3.5) {
+        knockPed(p, v.state.vx, v.state.vz);
+        audio.thud();
+        if (v === player.vehicle) crime("hitCop", p.x, p.z, false);
+        break;
+      }
+      const dd = Math.hypot(dx, dz) || 1;
+      p.x += (dx / dd) * (min - dd);
+      p.z += (dz / dd) * (min - dd);
+    }
+  }
+}
 
 // ---------------------------------------------------------------- pedestrians
 
@@ -213,6 +473,8 @@ const carHpEl = $<HTMLDivElement>("#carhp .fill");
 const carHpWrap = $<HTMLDivElement>("#carhp");
 const statsEl = $("#stats");
 const deathEl = $<HTMLDivElement>("#death");
+const starsEl = $<HTMLDivElement>("#wanted");
+const bannerEl = $<HTMLDivElement>("#banner");
 let cameraMode = 0;
 let started = false;
 let paused = true;
@@ -261,6 +523,10 @@ function sideDoor(s: CarState, dist: number): { x: number; z: number } {
 
 function enterVehicle(v: Vehicle): void {
   player.vehicle = v;
+  if (v.police) {
+    crime("stealCop", v.state.x, v.state.z, false);
+    v.police.mode = "patrol";
+  } else if (v.ai) crime("carjack", v.state.x, v.state.z, true);
   if (v.ai) {
     // Carjack: the driver is thrown out and runs away.
     const door = sideDoor(v.state, 2.2);
@@ -280,6 +546,7 @@ function exitVehicle(): void {
   player.heading = v.state.heading;
   player.vehicle = null;
   v.input = { throttle: 0, steer: 0, brake: false, handbrake: true };
+  v.blame = simTime;
   playerVis.group.visible = true;
 }
 
@@ -303,14 +570,41 @@ function obstaclesFor(self: Vehicle): Obstacle[] {
   return list;
 }
 
+function showOverlay(title: string, sub: string): void {
+  deathEl.innerHTML = `<div>${title}</div><small>${sub}</small>`;
+  deathEl.classList.add("show");
+}
+
+function showBanner(text: string): void {
+  banner = { text, ttl: 3.5 };
+}
+
 function killPlayer(): void {
   if (player.dead > 0) return;
   player.dead = 3.5;
   player.health = 0;
-  deathEl.classList.add("show");
+  wanted.clear();
+  standDown();
+  showOverlay("Вы погибли", "Возвращение в город…");
+}
+
+function arrestPlayer(): void {
+  if (player.dead > 0) return;
+  player.dead = 3.5;
+  if (player.vehicle) {
+    player.vehicle.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
+    player.speed = 0;
+  }
+  wanted.clear();
+  standDown();
+  bustTimer = 0;
+  showOverlay("Задержаны", "Розыск снят. Машина конфискована.");
 }
 
 function respawnPlayer(): void {
+  if (player.vehicle) {
+    player.vehicle.input = { throttle: 0, steer: 0, brake: false, handbrake: true };
+  }
   player.dead = 0;
   player.health = 100;
   player.vehicle = null;
@@ -358,6 +652,15 @@ function explode(x: number, z: number, source: Vehicle | null): void {
     if (d < 11) knockPed(p, (dx / (d || 1)) * (16 - d), (dz / (d || 1)) * (16 - d));
     else if (d < 40) scare(p, { x, z }, 6);
   }
+  const playerCaused = !!source && (source === player.vehicle || simTime - source.blame < 20);
+  if (playerCaused) {
+    for (const v of vehicles) if (Math.hypot(v.state.x - x, v.state.z - z) < 13) v.blame = simTime;
+    crime(source!.kind === "police" ? "killCop" : "explosion", x, z, false);
+  }
+  for (const c of cops) {
+    const d = Math.hypot(c.ped.x - x, c.ped.z - z);
+    if (d < 11) knockPed(c.ped, ((c.ped.x - x) / (d || 1)) * (16 - d), ((c.ped.z - z) / (d || 1)) * (16 - d));
+  }
   if (source && source === player.vehicle) killPlayer();
   else if (!player.vehicle) {
     player.health -= blastDamage(dPlayer, 11, 95);
@@ -370,7 +673,14 @@ function explode(x: number, z: number, source: Vehicle | null): void {
 let lastCrash = 0;
 let recycleTimer = 0;
 
+function playerTarget() {
+  const v = player.vehicle;
+  if (v) return { x: v.state.x, z: v.state.z, vx: v.state.vx, vz: v.state.vz };
+  return { x: player.x, z: player.z, vx: Math.cos(player.heading) * player.speed, vz: Math.sin(player.heading) * player.speed };
+}
+
 function update(dt: number, now: number): void {
+  simTime += dt;
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
   if (input.justPressed("KeyM")) audio.muted = !audio.muted;
 
@@ -381,6 +691,7 @@ function update(dt: number, now: number): void {
     if (player.dead <= 0) respawnPlayer();
   } else if (player.vehicle) {
     const v = player.vehicle;
+    v.blame = simTime;
     v.input.throttle = input.axis(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"]);
     v.input.steer = input.axis(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"]);
     v.input.handbrake = input.isDown("Space");
@@ -441,12 +752,29 @@ function update(dt: number, now: number): void {
   // Vehicles.
   for (const v of vehicles) {
     const s = v.state;
-    if (s.burning && v.ai) {
+    if (s.burning && v !== player.vehicle && (v.ai || (v.police && v.police.mode !== "patrol"))) {
       // The driver bails out of a burning car.
       const door = sideDoor(s, 2.2);
       emergePed(door.x, door.z, s);
       v.ai = null;
+      if (v.police) v.police.mode = "patrol";
       v.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
+    }
+    if (v.police && v !== player.vehicle && !s.wrecked && !s.burning) {
+      if (v.police.mode === "pursuit" && !player.dead) {
+        v.input = policeDrive(s, v.police, layout, playerTarget(), dt);
+        // Drop a cop off when the player is on foot nearby.
+        if (!player.vehicle && !v.police.copOut && speedOf(s) < 5 && Math.hypot(s.x - player.x, s.z - player.z) < 16) {
+          const door = sideDoor(s, 2.2);
+          spawnCop(door.x, door.z);
+          v.police.copOut = true;
+        }
+      } else if (v.police.mode === "roadblock") {
+        v.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
+        if (wanted.level > 0 && Math.hypot(s.x - player.x, s.z - player.z) < 25) v.police.mode = "pursuit";
+      } else if (v.police.mode === "pursuit") {
+        v.input = { throttle: 0, steer: 0, brake: true, handbrake: false };
+      }
     }
     if (s.wrecked) {
       v.input.throttle = 0;
@@ -489,9 +817,20 @@ function update(dt: number, now: number): void {
       const dx = a.state.x - b.state.x;
       const dz = a.state.z - b.state.z;
       if (dx * dx + dz * dz > 36) continue;
-      const before = speedOf(a.state) + speedOf(b.state);
+      const sa = speedOf(a.state);
+      const sb = speedOf(b.state);
+      const before = sa + sb;
       if (separateCars(a.state, b.state, a.radius, b.radius)) {
         const after = speedOf(a.state) + speedOf(b.state);
+        const pv = a === player.vehicle ? a : b === player.vehicle ? b : null;
+        if (pv) {
+          const other = pv === a ? b : a;
+          other.blame = simTime;
+          // Only the player's own ramming counts; being rammed by the police is not a crime.
+          const mine = pv === a ? sa : sb;
+          const theirs = pv === a ? sb : sa;
+          if (other.police && before - after > 4 && mine > 6 && mine > theirs) crime("ramCop", other.state.x, other.state.z, false);
+        }
         if ((a === player.vehicle || b === player.vehicle) && before - after > 3 && now - lastCrash > 250) {
           audio.crash(before - after);
           shake = Math.max(shake, Math.min(0.8, (before - after) * 0.04));
@@ -518,6 +857,7 @@ function update(dt: number, now: number): void {
       const sp = speedOf(v.state);
       if (sp > 3.5) {
         knockPed(p, v.state.vx, v.state.vz);
+        if (v === player.vehicle) crime("hitPed", p.x, p.z, true);
         v.state.vx *= 0.92;
         v.state.vz *= 0.92;
         if (Math.hypot(p.x - player.x, p.z - player.z) < 40) audio.thud();
@@ -539,12 +879,27 @@ function update(dt: number, now: number): void {
     }
   }
 
+  stepCops(dt);
+  managePolice(dt);
+
   recycleTimer -= dt;
   if (recycleTimer <= 0) {
     recycleTimer = 0.5;
     recyclePeds(4);
     for (const v of vehicles) {
       if (v.state.wrecked && v.wreckAge > 40 && Math.hypot(v.state.x - player.x, v.state.z - player.z) > 90) recycleAsTraffic(v);
+    }
+    // Send surplus police home once they are far away.
+    let patrolsKept = 0;
+    for (let i = vehicles.length - 1; i >= 0; i--) {
+      const v = vehicles[i];
+      if (!v.police || v === player.vehicle || v.state.wrecked) continue;
+      const far = Math.hypot(v.state.x - player.x, v.state.z - player.z) > 230;
+      const surplus = v.police.mode === "roadblock" ? wanted.level === 0 || far : v.police.mode === "patrol" && ++patrolsKept > PATROLS;
+      if (far && surplus) {
+        scene.remove(v.visual.group);
+        vehicles.splice(i, 1);
+      }
     }
   }
 
@@ -556,6 +911,12 @@ function update(dt: number, now: number): void {
   const pv = player.dead ? null : player.vehicle;
   audio.engine(pv ? speedOf(pv.state) : 0, pv ? Math.max(0, pv.input.throttle) : 0, pv !== null && !pv.state.wrecked, dt);
   audio.screech(pv ? Math.abs(lateralSpeed(pv.state)) + (pv.input.handbrake && speedOf(pv.state) > 6 ? 4 : 0) : 0);
+  let sirenD = Infinity;
+  for (const v of vehicles) {
+    if (isActivePolice(v) && v.police!.mode !== "patrol") sirenD = Math.min(sirenD, Math.hypot(v.state.x - player.x, v.state.z - player.z));
+  }
+  audio.siren(sirenD, simTime);
+  if (banner.ttl > 0) banner.ttl -= dt;
 
   if (player.health < 100 && player.health > 0 && !player.vehicle?.state.burning) player.health = Math.min(100, player.health + dt * 2);
 }
@@ -658,6 +1019,7 @@ function syncVisuals(dt: number): void {
   for (const v of vehicles) {
     const braking = v.input.brake || v.input.handbrake || (v.input.throttle < 0 && forwardSpeed(v.state) > 0.5);
     syncCarVisual(v.visual, v.state, braking, ground(v.state.x, v.state.z), dt);
+    flashSiren(v.visual, !!v.police && v.police.mode !== "patrol" && !v.state.wrecked && v !== player.vehicle, simTime);
     emitVehicleFx(v, dt);
   }
   for (let i = 0; i < peds.length; i++) {
@@ -670,6 +1032,13 @@ function syncVisuals(dt: number): void {
     vis.group.rotation.y = -p.heading + Math.PI / 2;
     animatePedestrian(vis, p.speed, dt, p.fall);
   }
+  for (const c of cops) {
+    const p = c.ped;
+    c.vis.group.position.set(p.x, ground(p.x, p.z) + p.y, p.z);
+    c.vis.group.rotation.y = -p.heading + Math.PI / 2;
+    animatePedestrian(c.vis, p.speed, dt, p.fall);
+  }
+  heli.update(dt, player.x, player.z);
   if (!player.vehicle) {
     playerVis.group.position.set(player.x, ground(player.x, player.z), player.z);
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
@@ -686,12 +1055,33 @@ function updateHud(): void {
   healthEl.style.width = `${Math.max(0, player.health)}%`;
   carHpWrap.style.display = v ? "block" : "none";
   if (v) carHpEl.style.width = `${v.state.health}%`;
-  hintEl.classList.toggle("alert", !!v && v.state.burning);
   if (player.dead > 0) hintEl.textContent = "";
   else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? "Машина горит! E — выйти" : "Машина горит! Тормозите и выходите";
   else if (v) hintEl.textContent = speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал" : "Пробел — ручник · C — камера";
+  else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
   else hintEl.textContent = nearestEnterable() ? "E — сесть в машину" : "WASD — идти · Shift — бежать";
-  const dots = vehicles.map((x) => ({ x: x.state.x, z: x.state.z, color: x === v ? "#ffd32a" : x.state.wrecked ? "#555" : x.state.burning ? "#ff6b3a" : x.ai ? "#dfe6e9" : "#74b9ff" }));
+  hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
+  const stars = starsEl.children;
+  for (let i = 0; i < stars.length; i++) stars[i].classList.toggle("on", i < wanted.level);
+  starsEl.classList.toggle("searching", wanted.searching);
+  starsEl.style.setProperty("--escape", String(wanted.escapeProgress()));
+  bannerEl.textContent = banner.text;
+  bannerEl.classList.toggle("show", banner.ttl > 0);
+  const blink = Math.floor(simTime * 4) % 2 === 0;
+  const dots = vehicles.map((x) => ({
+    x: x.state.x,
+    z: x.state.z,
+    color:
+      x === v ? "#ffd32a"
+      : x.state.wrecked ? "#555"
+      : x.state.burning ? "#ff6b3a"
+      : x.police && x.police.mode !== "patrol" ? (blink ? "#ff3b3b" : "#3b7bff")
+      : x.police ? "#9ab8ff"
+      : x.ai ? "#dfe6e9"
+      : "#74b9ff",
+  }));
+  for (const c of cops) dots.push({ x: c.ped.x, z: c.ped.z, color: "#3b7bff" });
+  if (heli.active) dots.push({ x: heli.x, z: heli.z, color: blink ? "#ff3b3b" : "#ffffff" });
   minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots);
 }
 
@@ -751,6 +1141,12 @@ if (location.search.includes("debug")) {
     explode: (x: number, z: number) => explode(x, z, null),
     particles: () => ({ smoke: smoke.count, fire: fire.count }),
     skids: () => skids.added,
+    wanted,
+    setWanted: (n: number) => wanted.atLeast(n),
+    heli,
+    cops,
+    police: () => vehicles.filter((v) => v.police).map((v) => ({ mode: v.police!.mode, x: Math.round(v.state.x), z: Math.round(v.state.z), d: Math.round(Math.hypot(v.state.x - player.x, v.state.z - player.z)), wrecked: v.state.wrecked })),
+    bust: () => bustTimer,
     perf,
     drawCalls: () => renderer.info.render.calls,
     start: () => $("#btn-start").click(),

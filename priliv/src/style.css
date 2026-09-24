@@ -28,3 +28,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 #death.show { opacity: 1; }
 #death div { font-size: 54px; font-weight: 800; letter-spacing: 0.06em; color: #ff4d6d; text-shadow: 0 4px 24px rgba(0,0,0,0.8); }
 #death small { color: #e8c8cc; font-size: 15px; }
+#wanted { right: 20px; top: 36px; display: flex; gap: 4px; font-size: 26px; line-height: 1; }
+#wanted span { color: rgba(255,255,255,0.18); text-shadow: 0 2px 6px rgba(0,0,0,0.6); transition: color 0.2s; }
+#wanted span.on { color: #ffd32a; }
+#wanted.searching span.on { animation: starblink 0.8s steps(2) infinite; }
+#wanted.pulse { animation: starpulse 0.6s ease-out; }
+@keyframes starblink { 50% { color: rgba(255,211,42,0.25); } }
+@keyframes starpulse { 0% { transform: scale(1.5); } 100% { transform: scale(1); } }
+#banner { left: 50%; top: 22%; transform: translateX(-50%); font-size: 26px; font-weight: 800; letter-spacing: 0.04em; color: #7bed9f; text-shadow: 0 3px 16px rgba(0,0,0,0.8); opacity: 0; transition: opacity 0.4s; white-space: nowrap; }
+#banner.show { opacity: 1; }
