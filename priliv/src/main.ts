@@ -22,6 +22,7 @@ import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
 import { places, raceMission, regattaMission, storyMissions } from "./game/story";
 import { RIVAL_COLORS, RIVAL_NAMES, RaceStandings, gridSlot, makeRacer, racerInput, raceCheckpoints, streetRaceMission, tracks, type Racer, type Track } from "./game/streetRace";
+import { businesses, buyBusiness, collect, hourlyIncome, raidMission, stateOf, tick as tickBusiness, type Business } from "./game/business";
 import { MOD_SHOP, SHOP, buy, makeCourierRun, makeTaxiFare, taxiFare, type TaxiFare } from "./game/jobs";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
@@ -789,6 +790,7 @@ function setPaused(on: boolean): void {
       `<dt>Лучший круг</dt><dd>${save.bestRace ? save.bestRace.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Лучшая регата</dt><dd>${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Победы в гонках</dt><dd>${save.stats.racesWon}</dd>` +
+      `<dt>Бизнесы</dt><dd>${BUSINESSES.filter((b) => stateOf(save.business, b.id).owned).length} из ${BUSINESSES.length} · $${hourlyIncome(save.business, BUSINESSES)}/ч</dd>` +
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
     $("#btn-new").textContent = "Новая игра";
@@ -1249,13 +1251,17 @@ function handleMissionEvents(events: MissionEvent[]): void {
           const best = save.bestRegatta === null || e.time < save.bestRegatta;
           if (best) save.bestRegatta = e.time;
           extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
+        } else if (e.mission.id.startsWith("raid-")) {
+          const b = BUSINESSES.find((q) => `raid-${q.id}` === e.mission.id);
+          if (b) stateOf(save.business, b.id).raid = 0;
+          extra = " · банда больше не сунется";
         } else if (e.mission.id !== "courier" && !save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
         persist();
         endMission();
         showBanner(`Миссия выполнена: +$${e.reward}${extra}`);
-        if (!nextStory() && e.mission.id !== RACE.id && e.mission.id !== REGATTA_M.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
+        if (!nextStory() && STORY.some((m) => m.id === e.mission.id)) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
         break;
       }
       case "fail": {
@@ -1545,7 +1551,85 @@ function syncMissionVisuals(dt: number): void {
     if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, color, dt);
     else if (mb && mb !== player.boat && !mb.state.sunk) targetArrow.show(mb.state.x, mb.state.z, color, dt);
   }
+  syncBusinessMarkers(dt);
   for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
+}
+
+// ---------------------------------------------------------------- businesses
+
+const BUSINESSES = businesses(layout.n);
+const bizMarkers = BUSINESSES.map((b) => ({
+  b,
+  sale: new ZoneMarker(scene, 0xa29bfe, "$", 5),
+  owned: new ZoneMarker(scene, 0x2ecc71, "$", 5),
+  raid: new ZoneMarker(scene, 0xff4757, "!", 5),
+}));
+const insideBiz: Record<string, boolean> = {};
+
+/** Walking or driving slowly into a business: buy it, collect the till, or deal with a shakedown. */
+function visitBusiness(b: Business): void {
+  const st = stateOf(save.business, b.id);
+  if (!st.owned) {
+    openMenu(b.name, [
+      {
+        label: "Купить",
+        note: `доход $${b.income} в час, касса до $${b.cap.toLocaleString("ru-RU")}`,
+        price: b.price,
+        action: () => {
+          const left = buyBusiness(save.business, b, save.money);
+          if (left === null) return;
+          save.money = left;
+          persist();
+          closeMenu();
+          audio.alert();
+          showBanner(`Куплено: ${b.name}`);
+        },
+      },
+    ]);
+    return;
+  }
+  if (st.raid > 0) {
+    startMission(raidMission(b));
+    return;
+  }
+  const cash = collect(save.business, b);
+  if (cash > 0) {
+    addMoney(cash);
+    persist();
+    showBanner(`${b.name}: выручка +$${cash}`);
+  } else showBanner(`${b.name}: касса пока пуста`);
+}
+
+function updateBusinesses(dt: number): void {
+  for (const e of tickBusiness(save.business, BUSINESSES, dt / SECONDS_PER_HOUR, rng)) {
+    const b = BUSINESSES.find((q) => q.id === e.id)!;
+    audio.alert();
+    if (e.type === "raid") showBanner(`Наезд: ${b.name}! Приезжайте разобраться`);
+    else showBanner(`${b.name}: кассу вынесли${e.lost > 0 ? ` (−$${e.lost})` : ""}`);
+    persist();
+  }
+  const v = player.vehicle;
+  const slow = !v || speedOf(v.state) < 4;
+  // Busy (a mission, death, a boat): only track presence, so a mission that ends
+  // on a business does not trigger it until the player leaves and comes back.
+  const busy = runner.active || player.dead > 0 || !!player.boat;
+  for (const b of BUSINESSES) {
+    const isIn = Math.hypot(player.x - b.at.x, player.z - b.at.z) < 5;
+    if (isIn && slow && !insideBiz[b.id] && !busy) visitBusiness(b);
+    insideBiz[b.id] = isIn && (slow || !!insideBiz[b.id]);
+  }
+}
+
+function syncBusinessMarkers(dt: number): void {
+  for (const m of bizMarkers) {
+    const st = stateOf(save.business, m.b.id);
+    const which = runner.active ? null : !st.owned ? m.sale : st.raid > 0 ? m.raid : m.owned;
+    for (const z of [m.sale, m.owned, m.raid]) {
+      if (z === which) z.show(m.b.at.x, m.b.at.z);
+      else z.hide();
+      z.update(dt);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- street races
@@ -2120,6 +2204,7 @@ function update(dt: number, now: number): void {
 
   stepCops(dt);
   stepStreetRace(dt);
+  updateBusinesses(dt);
   managePolice(dt);
   updateMissions(dt);
 
@@ -2407,6 +2492,10 @@ function updateHud(): void {
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
     icons.push({ ...MARINA, color: "#00d2d3", label: "Л" });
+    for (const b of BUSINESSES) {
+      const st = stateOf(save.business, b.id);
+      icons.push({ ...b.at, color: !st.owned ? "#a29bfe" : st.raid > 0 ? (blink ? "#ff4757" : "#ffffff") : "#2ecc71", label: st.raid > 0 ? "!" : "$", clamp: st.raid > 0 });
+    }
   }
   const cur = runner.currentStep;
   if (cur?.kind === "collect") cur.points.forEach((p, i) => !runner.collected[i] && icons.push({ ...p, color: "#55efc4", label: "◆" }));
@@ -2492,6 +2581,8 @@ if (location.search.includes("debug")) {
     missionBoats,
     policeBoat: () => policeBoat,
     street: () => street,
+    businesses: BUSINESSES,
+    tickBusiness: (hours: number) => updateBusinesses(hours * SECONDS_PER_HOUR),
     startStreetRace: (i: number) => player.vehicle && startStreetRace(TRACKS[i], player.vehicle),
     enterBoat: (i: number) => enterBoat(boats[i]),
     taxi: () => taxi,
