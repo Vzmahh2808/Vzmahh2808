@@ -36,6 +36,10 @@ export interface Mission {
   steps: Step[];
   /** Stars forced on when a given step index completes. */
   heatAfter?: Record<number, number>;
+  /** Where the contact marker for this mission stands; defaults to the main contact. */
+  contact?: Point;
+  /** Story chapter, shown when a chapter begins. */
+  chapter?: number;
 }
 
 export interface MissionContext {
