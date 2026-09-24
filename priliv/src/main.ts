@@ -6,7 +6,7 @@ import { buildCityMeshes } from "./world/cityMesh";
 import { buildWalkGraph } from "./world/sidewalks";
 import { CAR_SPECS, CIVILIAN_KINDS, collideCar, forwardSpeed, lateralSpeed, makeCar, separateCars, speedOf, stepCar, type CarInput, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
-import { buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
+import { beamMaterial, buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
 import { animatePedestrian, buildPedestrian, HAIR, PANTS, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
 import { knockPed, rejoinNetwork, scare, spawnPeds, stepPed, type Ped, type Threat } from "./entities/peds";
 import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
@@ -20,6 +20,10 @@ import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
 import { places, raceMission, storyMissions } from "./game/story";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
+import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
+import { WEATHER_NAMES, Weather, type WeatherKind } from "./world/weather";
+import { Radio } from "./audio/radio";
+import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -63,7 +67,8 @@ scene.add(flash);
 const seed = 20260924;
 const rng = new Rng(seed);
 const layout = generateCity(rng, 8);
-scene.add(buildCityMeshes(layout).group);
+const cityMeshes = buildCityMeshes(layout);
+scene.add(cityMeshes.group);
 const walkGraph = buildWalkGraph(layout);
 const ground = (x: number, z: number) => surfaceHeight(layout.n, x, z);
 
@@ -186,6 +191,103 @@ function spawnGarageCars(): void {
 }
 spawnGarageCars();
 
+// ---------------------------------------------------------------- atmosphere
+
+let clock = save.clock;
+const weather = new Weather(new Rng(seed ^ 0x5eed), "clear");
+let visibility = 1;
+let lightningTimer = 8;
+let lightningFlash = 0;
+const rainFx = new Rain(scene);
+const headlight = new THREE.SpotLight(0xfff1d6, 0, 70, 0.55, 0.6, 1.2);
+scene.add(headlight, headlight.target);
+const copLight = new THREE.PointLight(0xff2020, 0, 40, 1.6);
+scene.add(copLight);
+const WEATHER_ICON: Record<WeatherKind, string> = { clear: "☀", cloudy: "☁", rain: "🌧", storm: "⛈" };
+
+function persist(): void {
+  save.clock = wrapHour(clock);
+  writeSave(save);
+}
+
+/** Car specs with grip scaled for wet roads; rebuilt when the road wetness changes. */
+let wetSpecs: Record<string, (typeof CAR_SPECS)[string]> = CAR_SPECS;
+let wetGrip = 1;
+function specFor(kind: string) {
+  const g = weather.gripFactor();
+  if (Math.abs(g - wetGrip) > 0.01) {
+    wetGrip = g;
+    wetSpecs = Object.fromEntries(Object.entries(CAR_SPECS).map(([k, sp]) => [k, { ...sp, grip: sp.grip * g, handbrakeGrip: sp.handbrakeGrip * g }]));
+  }
+  return wetSpecs[kind];
+}
+
+function applyAtmosphere(dt: number): void {
+  const L = lightingAt(clock);
+  const cloud = weather.cloud;
+  const rainI = weather.rain;
+  const grey = lerpColor(0x7d8590, 0x151820, L.night);
+  let sky = lerpColor(L.skyColor, grey, cloud * 0.8);
+  let flashK = 0;
+  if (lightningFlash > 0) {
+    lightningFlash -= dt;
+    flashK = Math.max(0, Math.sin(lightningFlash * 40)) * Math.min(1, lightningFlash * 4);
+    sky = lerpColor(sky, 0xdfe6ff, flashK * 0.7);
+  }
+  (scene.background as THREE.Color).setHex(sky);
+  const fog = scene.fog as THREE.Fog;
+  fog.color.setHex(sky);
+  fog.near = 120 * (1 - 0.6 * rainI);
+  fog.far = Math.max(140, 420 * (1 - 0.45 * rainI) - 80 * L.night);
+  const dark = Math.max(L.night, cloud * 0.35);
+  sun.intensity = L.sunIntensity * (1 - 0.6 * cloud);
+  sun.color.setHex(L.sunColor);
+  hemi.intensity = L.hemiIntensity * (1 - 0.3 * cloud) + flashK * 2.5;
+  hemi.color.setHex(lerpColor(0xcfe6ff, sky, 0.5));
+  hemi.groundColor.setHex(L.groundColor);
+  renderer.toneMappingExposure = 1.05 + 0.35 * L.night;
+  cityMeshes.buildingMaterial.emissiveIntensity = L.night * 1.1;
+  cityMeshes.lampHeadMaterial.emissiveIntensity = 0.2 + L.night * 2.5;
+  cityMeshes.lampPoolMaterial.opacity = L.night * 0.55;
+  beamMaterial.opacity = dark * 0.45;
+  const wet = weather.wet;
+  cityMeshes.roadMaterial.roughness = 0.95 - 0.55 * wet;
+  cityMeshes.roadMaterial.metalness = 0.2 * wet;
+  cityMeshes.roadMaterial.color.setScalar(1 - 0.35 * wet);
+  cityMeshes.pavementMaterial.roughness = 0.9 - 0.4 * wet;
+  cityMeshes.pavementMaterial.color.setScalar(1 - 0.2 * wet);
+  cityMeshes.groundMaterial.color.setHex(lerpColor(0x4f7a3c, 0x33502a, wet * 0.6));
+
+  // The player's car throws a real light at night.
+  const pv = player.vehicle;
+  if (pv && dark > 0.1 && !pv.state.wrecked) {
+    const fx = Math.cos(pv.state.heading);
+    const fz = Math.sin(pv.state.heading);
+    headlight.position.set(pv.state.x + fx * 2.4, 1, pv.state.z + fz * 2.4);
+    headlight.target.position.set(pv.state.x + fx * 18, 0, pv.state.z + fz * 18);
+    headlight.intensity = 450 * dark;
+  } else headlight.intensity = 0;
+
+  // One flashing light for the closest chasing cruiser.
+  let best: Vehicle | null = null;
+  let bestD = 60;
+  for (const v of vehicles) {
+    if (!isActivePolice(v) || v.police!.mode === "patrol") continue;
+    const d = Math.hypot(v.state.x - player.x, v.state.z - player.z);
+    if (d < bestD) {
+      bestD = d;
+      best = v;
+    }
+  }
+  if (best) {
+    copLight.position.set(best.state.x, 2.4, best.state.z);
+    copLight.color.setHex(Math.floor(simTime * 7) % 4 < 2 ? 0xff2020 : 0x2a5bff);
+    copLight.intensity = 260 * Math.max(0.25, dark);
+  } else copLight.intensity = 0;
+
+  rainFx.update(dt, rainI, camera.position.x, camera.position.y, camera.position.z);
+}
+
 interface Cop {
   ped: Ped;
   vis: PedVisual;
@@ -214,7 +316,9 @@ function isActivePolice(v: Vehicle): boolean {
 }
 
 /** Does any police unit see the point (x, z)? */
-function policeCanSee(x: number, z: number, carRange = 65): boolean {
+function policeCanSee(x: number, z: number, range = 65): boolean {
+  // Darkness and rain make it easier to slip away.
+  const carRange = range * visibility;
   for (const v of vehicles) {
     if (!isActivePolice(v)) continue;
     const d = Math.hypot(v.state.x - x, v.state.z - z);
@@ -510,6 +614,7 @@ const moneyEl = $<HTMLDivElement>("#money");
 const objectiveEl = $<HTMLDivElement>("#objective");
 const arrowEl = $<HTMLDivElement>("#goal-arrow");
 const briefEl = $<HTMLDivElement>("#brief");
+const clockEl = $<HTMLDivElement>("#clock");
 let cameraMode = 0;
 let started = false;
 let paused = true;
@@ -547,6 +652,9 @@ try {
   /* ignore */
 }
 
+const radio = new Radio(() => audio.node());
+radio.station = save.radio;
+
 const pauseEl = $<HTMLDivElement>("#pause");
 let confirmNew = false;
 function setPaused(on: boolean): void {
@@ -567,13 +675,15 @@ function setPaused(on: boolean): void {
     audio.siren(Infinity, 0);
     audio.screech(0);
     audio.horn(false);
+    audio.rain(0);
+    radio.update(false);
   }
 }
 $("#btn-resume").addEventListener("click", () => setPaused(false));
 $("#btn-sound").addEventListener("click", () => {
   audio.muted = !audio.muted;
   save.muted = audio.muted;
-  writeSave(save);
+  persist();
   $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
 });
 $("#btn-new").addEventListener("click", () => {
@@ -690,7 +800,7 @@ function killPlayer(): void {
   const fee = Math.min(save.money, 100);
   save.money -= fee;
   save.stats.deaths++;
-  writeSave(save);
+  persist();
   showOverlay("Вы погибли", fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
 }
 
@@ -711,7 +821,7 @@ function arrestPlayer(): void {
   const fine = Math.min(save.money, Math.max(50, Math.round(save.money * 0.1)));
   save.money -= fine;
   save.stats.arrests++;
-  writeSave(save);
+  persist();
   showOverlay("Задержаны", `Штраф $${fine}. Розыск снят, машина конфискована.`);
 }
 
@@ -874,7 +984,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
         } else if (!save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
-        writeSave(save);
+        persist();
         endMission();
         showBanner(`Миссия выполнена: +$${e.reward}${extra}`);
         if (!nextStory() && e.mission.id !== RACE.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
@@ -929,7 +1039,7 @@ function updateMissions(dt: number): void {
     else {
       storeInGarage(save, { kind: v.kind, color: v.visual.baseColor.getHex() });
       v.garaged = true;
-      writeSave(save);
+      persist();
       showBanner("Машина в гараже");
     }
   }
@@ -946,7 +1056,7 @@ function updateMissions(dt: number): void {
         wanted.clear();
         standDown();
       }
-      writeSave(save);
+      persist();
       showBanner(hidden ? "Новый цвет. Полиция вас потеряла" : wanted.level > 0 ? "Отремонтировано, но полиция всё видела" : "Машина как новая");
     }
   }
@@ -954,7 +1064,7 @@ function updateMissions(dt: number): void {
   autosaveTimer -= dt;
   if (autosaveTimer <= 0) {
     autosaveTimer = 20;
-    writeSave(save);
+    persist();
   }
 }
 
@@ -996,11 +1106,30 @@ function playerTarget() {
 
 function update(dt: number, now: number): void {
   simTime += dt;
+  clock = wrapHour(clock + dt / SECONDS_PER_HOUR);
+  if (weather.update(dt)) showBanner(`${WEATHER_ICON[weather.kind]} ${WEATHER_NAMES[weather.kind]}`);
+  visibility = Weather.visibility(lightingAt(clock).night, weather.rain);
+  if (weather.kind === "storm") {
+    lightningTimer -= dt;
+    if (lightningTimer <= 0) {
+      lightningTimer = 6 + Math.random() * 10;
+      lightningFlash = 0.35;
+      audio.thunder(0.4 + Math.random() * 1.6);
+    }
+  }
+  audio.rain(weather.rain);
+  radio.update(!!player.vehicle && player.dead === 0 && !audio.muted);
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
+  if (input.justPressed("KeyR")) {
+    const name = radio.next();
+    save.radio = radio.station;
+    persist();
+    showBanner(radio.station >= 0 ? `📻 ${name}` : name);
+  }
   if (input.justPressed("KeyM")) {
     audio.muted = !audio.muted;
     save.muted = audio.muted;
-    writeSave(save);
+    persist();
   }
 
   const threats: Threat[] = [];
@@ -1102,7 +1231,7 @@ function update(dt: number, now: number): void {
       v.wreckAge += dt;
     }
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
-    stepCar(s, CAR_SPECS[v.kind], v.input, dt);
+    stepCar(s, specFor(v.kind), v.input, dt);
     const push = resolveCircleVsBuildings(layout, s.x, s.z, v.radius * 0.85);
     if (push) {
       const dmg = collideCar(s, push.x, push.z);
@@ -1292,7 +1421,16 @@ function updateCamera(dt: number): void {
     camera.fov += (target - camera.fov) * Math.min(1, dt * 3);
     camera.updateProjectionMatrix();
   }
-  sun.position.set(tx + 60, 110, tz + 40);
+  // The sun sweeps east to west with the clock; at night a high moon casts soft light.
+  const L = lightingAt(clock);
+  if (L.sunElevation > 0) {
+    const el = Math.max(0.2, L.sunElevation);
+    const az = ((wrapHour(clock) - 6) / 12) * Math.PI;
+    const r = 150;
+    sun.position.set(tx + Math.cos(az) * Math.cos(el) * r, Math.sin(el) * r, tz + Math.cos(el) * r * 0.35);
+  } else {
+    sun.position.set(tx + 50, 120, tz + 60);
+  }
   sun.target.position.set(tx, 0, tz);
 }
 
@@ -1361,6 +1499,7 @@ function syncVisuals(dt: number): void {
   }
   heli.update(dt, player.x, player.z);
   syncMissionVisuals(dt);
+  applyAtmosphere(dt);
   if (!player.vehicle) {
     playerVis.group.position.set(player.x, ground(player.x, player.z), player.z);
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
@@ -1390,6 +1529,8 @@ function updateHud(): void {
   bannerEl.textContent = banner.text;
   bannerEl.classList.toggle("show", banner.ttl > 0);
   moneyEl.textContent = `$${save.money.toLocaleString("ru-RU")}`;
+  const icon = weather.kind === "clear" && lightingAt(clock).night > 0.5 ? "☾" : WEATHER_ICON[weather.kind];
+  clockEl.textContent = `${icon} ${formatClock(clock)}`;
   briefEl.classList.toggle("show", briefTimer > 0 && runner.active);
   const left = runner.timeLeft;
   const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
@@ -1459,6 +1600,7 @@ function frame(now: number): void {
     }
     if (steps === 6) accumulator = 0;
   }
+  if (paused) radio.update(false);
   updateCamera(dt);
   syncVisuals(paused ? 0 : dt);
   updateHud();
@@ -1496,6 +1638,12 @@ if (location.search.includes("debug")) {
     bust: () => bustTimer,
     flags: debugFlags,
     runner,
+    setTime: (h: number) => (clock = h),
+    setWeather: (k: WeatherKind) => {
+      weather.set(k);
+    },
+    weather,
+    radio,
     save: () => save,
     places: PLACES,
     missionCars,

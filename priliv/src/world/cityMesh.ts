@@ -2,29 +2,63 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BLOCK_SIZE, LANE_WIDTH, ROAD_WIDTH, SIDEWALK, roadCoord, type CityLayout } from "./city";
 
-function windowTexture(): THREE.Texture {
-  const size = 128;
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  const g = c.getContext("2d")!;
+/** Facade texture plus a matching emissive map where only the lit windows glow at night. */
+function windowTextures(): { map: THREE.Texture; glow: THREE.Texture } {
+  const size = 256;
+  const make = () => {
+    const c = document.createElement("canvas");
+    c.width = c.height = size;
+    return c;
+  };
+  const cm = make();
+  const ce = make();
+  const g = cm.getContext("2d")!;
+  const e = ce.getContext("2d")!;
   g.fillStyle = "#e8e8e8";
   g.fillRect(0, 0, size, size);
-  // 4x4 windows per tile (a tile is 3x3 metres in world space).
-  for (let y = 0; y < 4; y++) {
-    for (let x = 0; x < 4; x++) {
-      const lit = Math.random() < 0.25;
+  e.fillStyle = "#000";
+  e.fillRect(0, 0, size, size);
+  // 8x8 windows per tile (a tile is 6x6 metres of facade after UV scaling).
+  const cell = size / 8;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const lit = Math.random() < 0.3;
+      const wx = x * cell + cell * 0.18;
+      const wy = y * cell + cell * 0.15;
+      const ww = cell * 0.62;
+      const wh = cell * 0.68;
       g.fillStyle = lit ? "#fff3c4" : "#3a4657";
-      g.fillRect(x * 32 + 6, y * 32 + 5, 20, 22);
+      g.fillRect(wx, wy, ww, wh);
       g.fillStyle = "rgba(255,255,255,0.18)";
-      g.fillRect(x * 32 + 6, y * 32 + 5, 8, 22);
+      g.fillRect(wx, wy, ww * 0.4, wh);
+      if (lit) {
+        e.fillStyle = Math.random() < 0.8 ? "#ffd89a" : "#bfe3ff";
+        e.fillRect(wx, wy, ww, wh);
+      }
     }
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
+  const finish = (c: HTMLCanvasElement) => {
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return t;
+  };
+  return { map: finish(cm), glow: finish(ce) };
+}
+
+function radialTexture(inner: string, outer: string): THREE.Texture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, inner);
+  grad.addColorStop(1, outer);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
 
 function box(w: number, h: number, d: number, x: number, y: number, z: number, color: THREE.Color): THREE.BufferGeometry {
@@ -41,18 +75,18 @@ function box(w: number, h: number, d: number, x: number, y: number, z: number, c
   return g;
 }
 
-/** Box with window UVs scaled so one texture tile is 3 metres; roof gets uv (0,0) to stay plain. */
+/** Box with window UVs scaled so one texture tile is 6 metres; roof gets uv (0,0) to stay plain. */
 function buildingBox(w: number, h: number, d: number, x: number, z: number, color: THREE.Color): THREE.BufferGeometry {
   const g = box(w, h, d, x, h / 2, z, color);
   const uv = g.attributes.uv as THREE.BufferAttribute;
   // BoxGeometry face order: +x, -x, +y, -y, +z, -z; 4 vertices each.
   const scales: Array<[number, number]> = [
-    [d / 3, h / 3],
-    [d / 3, h / 3],
+    [d / 6, h / 6],
+    [d / 6, h / 6],
     [0, 0],
     [0, 0],
-    [w / 3, h / 3],
-    [w / 3, h / 3],
+    [w / 6, h / 6],
+    [w / 6, h / 6],
   ];
   for (let f = 0; f < 6; f++) {
     const [su, sv] = scales[f];
@@ -66,6 +100,12 @@ function buildingBox(w: number, h: number, d: number, x: number, z: number, colo
 
 export interface CityMeshes {
   group: THREE.Group;
+  roadMaterial: THREE.MeshStandardMaterial;
+  pavementMaterial: THREE.MeshStandardMaterial;
+  buildingMaterial: THREE.MeshStandardMaterial;
+  lampHeadMaterial: THREE.MeshStandardMaterial;
+  lampPoolMaterial: THREE.MeshBasicMaterial;
+  groundMaterial: THREE.MeshStandardMaterial;
 }
 
 export function buildCityMeshes(layout: CityLayout): CityMeshes {
@@ -74,7 +114,8 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
   const outer = layout.half + ROAD_WIDTH / 2;
 
   // Ground.
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(outer * 2 + 400, outer * 2 + 400), new THREE.MeshStandardMaterial({ color: 0x4f7a3c, roughness: 1 }));
+  const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x4f7a3c, roughness: 1 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(outer * 2 + 400, outer * 2 + 400), groundMaterial);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.05;
   ground.receiveShadow = true;
@@ -88,7 +129,8 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
     roadGeos.push(box(outer * 2, 0.1, ROAD_WIDTH, 0, 0, c, asphalt));
     roadGeos.push(box(ROAD_WIDTH, 0.1, outer * 2, c, 0, 0, asphalt));
   }
-  const roads = new THREE.Mesh(mergeGeometries(roadGeos), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+  const roadMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  const roads = new THREE.Mesh(mergeGeometries(roadGeos), roadMaterial);
   roads.receiveShadow = true;
   group.add(roads);
 
@@ -106,7 +148,8 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
       if (!hasBuilding) paveGeos.push(box(BLOCK_SIZE - 2, 0.32, BLOCK_SIZE - 2, cx, 0.1, cz, grass));
     }
   }
-  const pavement = new THREE.Mesh(mergeGeometries(paveGeos), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }));
+  const pavementMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
+  const pavement = new THREE.Mesh(mergeGeometries(paveGeos), pavementMaterial);
   pavement.receiveShadow = true;
   group.add(pavement);
 
@@ -154,10 +197,17 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
       bGeos.push(box(b.w + 0.6, 0.5, b.d + 0.6, b.x, b.h + 0.25, b.z, col.clone().multiplyScalar(0.6)));
     }
   }
-  const buildings = new THREE.Mesh(
-    mergeGeometries(bGeos),
-    new THREE.MeshStandardMaterial({ vertexColors: true, map: windowTexture(), roughness: 0.75, metalness: 0.05 }),
-  );
+  const tex = windowTextures();
+  const buildingMaterial = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    map: tex.map,
+    emissiveMap: tex.glow,
+    emissive: 0xffffff,
+    emissiveIntensity: 0,
+    roughness: 0.75,
+    metalness: 0.05,
+  });
+  const buildings = new THREE.Mesh(mergeGeometries(bGeos), buildingMaterial);
   buildings.castShadow = true;
   buildings.receiveShadow = true;
   group.add(buildings);
@@ -188,7 +238,8 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
   headGeo.translate(2.1, 6.9, 0);
   const lampGeo = mergeGeometries([poleGeo, armGeo]);
   const poles = new THREE.InstancedMesh(lampGeo, new THREE.MeshStandardMaterial({ color: 0x555a63, roughness: 0.6, metalness: 0.4 }), layout.lamps.length);
-  const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshStandardMaterial({ color: 0xfff1c0, emissive: 0xffe9a0, emissiveIntensity: 0.6 }), layout.lamps.length);
+  const lampHeadMaterial = new THREE.MeshStandardMaterial({ color: 0xfff1c0, emissive: 0xffe9a0, emissiveIntensity: 0.6 });
+  const heads = new THREE.InstancedMesh(headGeo, lampHeadMaterial, layout.lamps.length);
   layout.lamps.forEach((l, i) => {
     m.makeRotationY(-l.rot).setPosition(l.x, 0.3, l.z);
     poles.setMatrixAt(i, m);
@@ -197,5 +248,23 @@ export function buildCityMeshes(layout: CityLayout): CityMeshes {
   poles.castShadow = true;
   group.add(poles, heads);
 
-  return { group };
+  // Warm pools of light under each lamp, faded in at night.
+  const poolGeo = new THREE.PlaneGeometry(12, 12);
+  poolGeo.rotateX(-Math.PI / 2);
+  const lampPoolMaterial = new THREE.MeshBasicMaterial({
+    map: radialTexture("rgba(255,214,150,0.9)", "rgba(255,214,150,0)"),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const pools = new THREE.InstancedMesh(poolGeo, lampPoolMaterial, layout.lamps.length);
+  layout.lamps.forEach((l, i) => {
+    m.makeTranslation(l.x + Math.cos(l.rot) * 2.1, 0.27, l.z + Math.sin(l.rot) * 2.1);
+    pools.setMatrixAt(i, m);
+  });
+  pools.renderOrder = 1;
+  group.add(pools);
+
+  return { group, roadMaterial, pavementMaterial, buildingMaterial, lampHeadMaterial, lampPoolMaterial, groundMaterial };
 }

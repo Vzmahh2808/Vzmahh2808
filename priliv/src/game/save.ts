@@ -14,6 +14,10 @@ export interface SaveData {
   garage: GarageCar[];
   bestRace: number | null;
   muted: boolean;
+  /** Radio station index, -1 for off. */
+  radio: number;
+  /** In-game hour, restored on load. */
+  clock: number;
   stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number };
 }
 
@@ -31,6 +35,8 @@ export function freshSave(): SaveData {
     garage: [],
     bestRace: null,
     muted: false,
+    radio: 0,
+    clock: 17,
     stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0 },
   };
 }
@@ -66,6 +72,8 @@ export function parseSave(raw: string | null): SaveData | null {
       : [],
     bestRace: typeof data.bestRace === "number" && data.bestRace > 0 ? data.bestRace : null,
     muted: data.muted === true,
+    radio: typeof data.radio === "number" && data.radio >= -1 && data.radio <= 2 ? Math.floor(data.radio) : base.radio,
+    clock: typeof data.clock === "number" && data.clock >= 0 && data.clock < 24 ? data.clock : base.clock,
     stats: {
       missions: num(data.stats?.missions, 0),
       arrests: num(data.stats?.arrests, 0),
