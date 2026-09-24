@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "sim": "vite-node scripts/sim.ts",
-    "verify": "vite-node scripts/verify.ts"
+    "verify": "vite-node scripts/verify.ts",
+    "challenge": "vite-node scripts/challenge.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
