@@ -16,6 +16,10 @@ import { Minimap } from "./ui/minimap";
 import { Wanted, type Crime } from "./police/wanted";
 import { lineOfSight, makeUnit, nearestIntersection, policeDrive, type PoliceUnit } from "./police/policeAI";
 import { Helicopter } from "./police/helicopter";
+import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData } from "./game/save";
+import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
+import { places, raceMission, storyMissions } from "./game/story";
+import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { CarAudio } from "./audio/engine";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -82,6 +86,10 @@ interface Vehicle {
   police: PoliceUnit | null;
   /** simTime the player last drove or hit this car; used to blame explosions. */
   blame: number;
+  /** Key of the mission this car belongs to, while that mission runs. */
+  missionKey: string | null;
+  /** Already stored in the player's garage. */
+  garaged: boolean;
 }
 
 const vehicles: Vehicle[] = [];
@@ -101,6 +109,8 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     rearPrev: null,
     police,
     blame: -1e9,
+    missionKey: null,
+    garaged: false,
   };
   vehicles.push(v);
   return v;
@@ -152,6 +162,29 @@ function addPatrol(): Vehicle | null {
   return addVehicle(t.state, "police", POLICE_WHITE, t, makeUnit("patrol"));
 }
 for (let i = 0; i < PATROLS; i++) addPatrol();
+
+// ---------------------------------------------------------------- progress
+
+const hasSave = loadSave() !== null;
+let save: SaveData = loadSave() ?? newGameSave();
+const PLACES = places(layout.n);
+
+function newGameSave(): SaveData {
+  const s = freshSave();
+  // A starter car waits in the garage.
+  s.garage.push({ kind: "sedan", color: 0x2e86de });
+  return s;
+}
+
+function spawnGarageCars(): void {
+  save.garage.forEach((c, i) => {
+    const slot = PLACES.garageSlots[i];
+    if (!slot || !CAR_SPECS[c.kind]) return;
+    const v = addVehicle(makeCar(slot.x, slot.z, slot.heading), c.kind, c.color, null);
+    v.garaged = true;
+  });
+}
+spawnGarageCars();
 
 interface Cop {
   ped: Ped;
@@ -449,13 +482,11 @@ const playerVis = buildPedestrian(0x2e86de, 0x2d3436);
 scene.add(playerVis.group);
 const player = { x: 0, z: 0, heading: 0, speed: 0, vehicle: null as Vehicle | null, health: 100, dead: 0 };
 
+/** Home is the sidewalk outside the garage. */
 function placeAtStart(): void {
-  const parked = vehicles
-    .filter((v) => !v.ai && !v.state.wrecked && !v.state.burning)
-    .sort((a, b) => Math.hypot(a.state.x, a.state.z) - Math.hypot(b.state.x, b.state.z))[0];
-  player.x = parked ? parked.state.x + 3 : 0;
-  player.z = parked ? parked.state.z + 2.5 : 0;
-  player.heading = parked ? parked.state.heading : 0;
+  player.x = PLACES.garage.x;
+  player.z = PLACES.garage.z + 6.6;
+  player.heading = -Math.PI / 2;
 }
 placeAtStart();
 // Fill the streets around the starting point right away.
@@ -475,16 +506,86 @@ const statsEl = $("#stats");
 const deathEl = $<HTMLDivElement>("#death");
 const starsEl = $<HTMLDivElement>("#wanted");
 const bannerEl = $<HTMLDivElement>("#banner");
+const moneyEl = $<HTMLDivElement>("#money");
+const objectiveEl = $<HTMLDivElement>("#objective");
+const arrowEl = $<HTMLDivElement>("#goal-arrow");
+const briefEl = $<HTMLDivElement>("#brief");
 let cameraMode = 0;
 let started = false;
 let paused = true;
 let shake = 0;
 
-$("#btn-start").addEventListener("click", () => {
+function beginPlay(): void {
   $("#start").classList.add("hidden");
   audio.unlock();
+  audio.muted = save.muted;
   started = true;
   paused = false;
+}
+
+function newGame(): void {
+  clearSave();
+  try {
+    sessionStorage.setItem("priliv.autostart", "1");
+  } catch {
+    /* ignore */
+  }
+  location.reload();
+}
+
+const continueBtn = $<HTMLButtonElement>("#btn-continue");
+continueBtn.hidden = !hasSave;
+$("#btn-start").textContent = hasSave ? "Новая игра" : "Начать";
+continueBtn.addEventListener("click", beginPlay);
+$("#btn-start").addEventListener("click", () => (hasSave ? newGame() : beginPlay()));
+try {
+  if (sessionStorage.getItem("priliv.autostart") === "1") {
+    sessionStorage.removeItem("priliv.autostart");
+    queueMicrotask(beginPlay);
+  }
+} catch {
+  /* ignore */
+}
+
+const pauseEl = $<HTMLDivElement>("#pause");
+let confirmNew = false;
+function setPaused(on: boolean): void {
+  if (!started) return;
+  paused = on;
+  confirmNew = false;
+  pauseEl.classList.toggle("hidden", !on);
+  if (on) {
+    const story = storyMissions(layout.n).length;
+    $("#pause-stats").innerHTML =
+      `<dt>Деньги</dt><dd>$${save.money.toLocaleString("ru-RU")}</dd>` +
+      `<dt>Сюжет</dt><dd>${save.missionsDone.length} из ${story}</dd>` +
+      `<dt>Лучший круг</dt><dd>${save.bestRace ? save.bestRace.toFixed(1) + " с" : "—"}</dd>` +
+      `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
+    $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
+    $("#btn-new").textContent = "Новая игра";
+    audio.engine(0, 0, false, 1);
+    audio.siren(Infinity, 0);
+    audio.screech(0);
+    audio.horn(false);
+  }
+}
+$("#btn-resume").addEventListener("click", () => setPaused(false));
+$("#btn-sound").addEventListener("click", () => {
+  audio.muted = !audio.muted;
+  save.muted = audio.muted;
+  writeSave(save);
+  $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
+});
+$("#btn-new").addEventListener("click", () => {
+  if (!confirmNew) {
+    confirmNew = true;
+    $("#btn-new").textContent = "Точно? Прогресс удалится";
+    return;
+  }
+  newGame();
+});
+window.addEventListener("keydown", (ev) => {
+  if (ev.code === "Escape" && started) setPaused(!paused);
 });
 window.addEventListener("keydown", () => audio.unlock());
 
@@ -585,11 +686,19 @@ function killPlayer(): void {
   player.health = 0;
   wanted.clear();
   standDown();
-  showOverlay("Вы погибли", "Возвращение в город…");
+  failMission("вы погибли");
+  const fee = Math.min(save.money, 100);
+  save.money -= fee;
+  save.stats.deaths++;
+  writeSave(save);
+  showOverlay("Вы погибли", fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
 }
 
+/** Test switches, only reachable through the ?debug hook. */
+const debugFlags = { noArrest: false };
+
 function arrestPlayer(): void {
-  if (player.dead > 0) return;
+  if (player.dead > 0 || debugFlags.noArrest) return;
   player.dead = 3.5;
   if (player.vehicle) {
     player.vehicle.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
@@ -598,7 +707,12 @@ function arrestPlayer(): void {
   wanted.clear();
   standDown();
   bustTimer = 0;
-  showOverlay("Задержаны", "Розыск снят. Машина конфискована.");
+  failMission("вас задержали");
+  const fine = Math.min(save.money, Math.max(50, Math.round(save.money * 0.1)));
+  save.money -= fine;
+  save.stats.arrests++;
+  writeSave(save);
+  showOverlay("Задержаны", `Штраф $${fine}. Розыск снят, машина конфискована.`);
 }
 
 function respawnPlayer(): void {
@@ -654,6 +768,7 @@ function explode(x: number, z: number, source: Vehicle | null): void {
   }
   const playerCaused = !!source && (source === player.vehicle || simTime - source.blame < 20);
   if (playerCaused) {
+    save.stats.carsDestroyed++;
     for (const v of vehicles) if (Math.hypot(v.state.x - x, v.state.z - z) < 13) v.blame = simTime;
     crime(source!.kind === "police" ? "killCop" : "explosion", x, z, false);
   }
@@ -666,6 +781,206 @@ function explode(x: number, z: number, source: Vehicle | null): void {
     player.health -= blastDamage(dPlayer, 11, 95);
     if (player.health <= 0) killPlayer();
   }
+}
+
+// ---------------------------------------------------------------- missions, garage, paint shop
+
+const STORY = storyMissions(layout.n);
+const RACE = raceMission(layout.n);
+const runner = new MissionRunner();
+const missionCars = new Map<string, Vehicle>();
+const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4);
+const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5);
+const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5);
+const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
+const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6);
+const beam = new BeamMarker(scene, 0xff9f43, 9);
+const beamNext = new BeamMarker(scene, 0xff9f43, 9);
+const targetArrow = new TargetArrow(scene);
+garageMarker.show(PLACES.garage.x, PLACES.garage.z);
+paintMarker.show(PLACES.paint.x, PLACES.paint.z);
+const PAINT_COST = 150;
+const inside = { contact: false, race: false, garage: false, paint: false };
+let objectiveText = "";
+let briefTimer = 0;
+let autosaveTimer = 20;
+/** simTime of the last mission end; the garage and paint zones ignore that frame. */
+let missionEndedAt = -1e9;
+
+function nextStory(): Mission | undefined {
+  return STORY.find((m) => !save.missionsDone.includes(m.id));
+}
+
+function addMoney(amount: number): void {
+  save.money = Math.max(0, save.money + amount);
+  moneyEl.classList.remove("pulse");
+  void moneyEl.offsetWidth;
+  moneyEl.classList.add("pulse");
+}
+
+function startMission(m: Mission): void {
+  for (const [key, spec] of Object.entries(m.spawns ?? {})) {
+    const v = addVehicle(makeCar(spec.x, spec.z, spec.heading), spec.kind, spec.color, null);
+    if (spec.drives) {
+      v.ai = trafficFor(v);
+      v.input = v.ai.input;
+    }
+    v.missionKey = key;
+    missionCars.set(key, v);
+  }
+  $("#brief-title").textContent = m.title;
+  $("#brief-text").textContent = m.brief;
+  briefTimer = 7;
+  handleMissionEvents(runner.start(m));
+}
+
+function endMission(): void {
+  missionEndedAt = simTime;
+  for (const v of missionCars.values()) v.missionKey = null;
+  missionCars.clear();
+  objectiveText = "";
+  goalMarker.hide();
+  beam.hide();
+  beamNext.hide();
+  targetArrow.hide();
+}
+
+function failMission(reason: string): void {
+  if (runner.active) handleMissionEvents(runner.fail(reason));
+}
+
+function handleMissionEvents(events: MissionEvent[]): void {
+  for (const e of events) {
+    switch (e.type) {
+      case "step":
+        objectiveText = e.text;
+        break;
+      case "checkpoint":
+        audio.alert();
+        showBanner(`Точка ${e.index} из ${e.total}`);
+        break;
+      case "heat":
+        wanted.atLeast(e.stars);
+        audio.alert();
+        break;
+      case "done": {
+        addMoney(e.reward);
+        save.stats.missions++;
+        let extra = "";
+        if (e.mission.id === RACE.id) {
+          const best = save.bestRace === null || e.time < save.bestRace;
+          if (best) save.bestRace = e.time;
+          extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
+        } else if (!save.missionsDone.includes(e.mission.id)) {
+          save.missionsDone.push(e.mission.id);
+        }
+        writeSave(save);
+        endMission();
+        showBanner(`Миссия выполнена: +$${e.reward}${extra}`);
+        if (!nextStory() && e.mission.id !== RACE.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
+        break;
+      }
+      case "fail":
+        endMission();
+        showBanner(`Провал: ${e.reason}`);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+/** Fire once when the player enters a zone, not every frame they stay in it. */
+function entered(key: keyof typeof inside, x: number, z: number, r: number, ok: boolean): boolean {
+  const isIn = ok && Math.hypot(player.x - x, player.z - z) < r;
+  const fired = isIn && !inside[key];
+  inside[key] = isIn;
+  return fired;
+}
+
+function updateMissions(dt: number): void {
+  if (player.dead > 0) return;
+  const v = player.vehicle;
+  const slow = !v || speedOf(v.state) < 5;
+  if (runner.active) {
+    const destroyed = new Set<string>();
+    const positions: Record<string, { x: number; z: number }> = {};
+    for (const [key, mv] of missionCars) {
+      if (mv.state.burning || mv.state.wrecked) destroyed.add(key);
+      positions[key] = { x: mv.state.x, z: mv.state.z };
+    }
+    handleMissionEvents(
+      runner.update({ x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, destroyed }, dt),
+    );
+  } else {
+    const story = nextStory();
+    if (story && entered("contact", PLACES.contact.x, PLACES.contact.z, 5, slow)) startMission(story);
+    else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) startMission(RACE);
+  }
+
+  // A mission that just ended in a zone must not also trigger it; wait until the player leaves.
+  if (simTime - missionEndedAt < 0.5) {
+    inside.garage = inside.garage || Math.hypot(player.x - PLACES.garage.x, player.z - PLACES.garage.z) < 6;
+    inside.paint = inside.paint || Math.hypot(player.x - PLACES.paint.x, player.z - PLACES.paint.z) < 6;
+  }
+  if (v && entered("garage", PLACES.garage.x, PLACES.garage.z, 6, speedOf(v.state) < 3)) {
+    if (v.police || v.missionKey) showBanner("Эту машину в гараж не поставить");
+    else if (v.garaged) showBanner("Машина уже в гараже");
+    else {
+      storeInGarage(save, { kind: v.kind, color: v.visual.baseColor.getHex() });
+      v.garaged = true;
+      writeSave(save);
+      showBanner("Машина в гараже");
+    }
+  }
+  if (v && entered("paint", PLACES.paint.x, PLACES.paint.z, 6, speedOf(v.state) < 3)) {
+    if (save.money < PAINT_COST) showBanner(`Покраска стоит $${PAINT_COST}`);
+    else {
+      addMoney(-PAINT_COST);
+      v.state.health = 100;
+      v.state.burning = false;
+      v.state.fire = 0;
+      v.visual.baseColor.setHex(rng.pick(COLORS));
+      const hidden = wanted.level > 0 && !policeCanSee(player.x, player.z);
+      if (hidden) {
+        wanted.clear();
+        standDown();
+      }
+      writeSave(save);
+      showBanner(hidden ? "Новый цвет. Полиция вас потеряла" : wanted.level > 0 ? "Отремонтировано, но полиция всё видела" : "Машина как новая");
+    }
+  }
+
+  autosaveTimer -= dt;
+  if (autosaveTimer <= 0) {
+    autosaveTimer = 20;
+    writeSave(save);
+  }
+}
+
+function syncMissionVisuals(dt: number): void {
+  const story = nextStory();
+  if (!runner.active && story) contactMarker.show(PLACES.contact.x, PLACES.contact.z);
+  else contactMarker.hide();
+  if (!runner.active) raceMarker.show(PLACES.race.x, PLACES.race.z);
+  else raceMarker.hide();
+  goalMarker.hide();
+  beam.hide();
+  beamNext.hide();
+  targetArrow.hide();
+  const step = runner.currentStep;
+  if (step?.kind === "goto") goalMarker.show(step.at.x, step.at.z);
+  if (step?.kind === "race") {
+    const p = step.points[runner.checkpoint];
+    const q = step.points[runner.checkpoint + 1];
+    if (p) beam.show(p.x, p.z, true);
+    if (q) beamNext.show(q.x, q.z, false);
+  }
+  if (step && (step.kind === "enter" || step.kind === "destroy")) {
+    const mv = missionCars.get(step.target);
+    if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, step.kind === "destroy" ? 0xff4d6d : 0x7bed9f, dt);
+  }
+  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- simulation
@@ -682,7 +997,11 @@ function playerTarget() {
 function update(dt: number, now: number): void {
   simTime += dt;
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
-  if (input.justPressed("KeyM")) audio.muted = !audio.muted;
+  if (input.justPressed("KeyM")) {
+    audio.muted = !audio.muted;
+    save.muted = audio.muted;
+    writeSave(save);
+  }
 
   const threats: Threat[] = [];
 
@@ -881,13 +1200,14 @@ function update(dt: number, now: number): void {
 
   stepCops(dt);
   managePolice(dt);
+  updateMissions(dt);
 
   recycleTimer -= dt;
   if (recycleTimer <= 0) {
     recycleTimer = 0.5;
     recyclePeds(4);
     for (const v of vehicles) {
-      if (v.state.wrecked && v.wreckAge > 40 && Math.hypot(v.state.x - player.x, v.state.z - player.z) > 90) recycleAsTraffic(v);
+      if (v.state.wrecked && !v.missionKey && v.wreckAge > 40 && Math.hypot(v.state.x - player.x, v.state.z - player.z) > 90) recycleAsTraffic(v);
     }
     // Send surplus police home once they are far away.
     let patrolsKept = 0;
@@ -917,6 +1237,7 @@ function update(dt: number, now: number): void {
   }
   audio.siren(sirenD, simTime);
   if (banner.ttl > 0) banner.ttl -= dt;
+  if (briefTimer > 0) briefTimer -= dt;
 
   if (player.health < 100 && player.health > 0 && !player.vehicle?.state.burning) player.health = Math.min(100, player.health + dt * 2);
 }
@@ -1039,6 +1360,7 @@ function syncVisuals(dt: number): void {
     animatePedestrian(c.vis, p.speed, dt, p.fall);
   }
   heli.update(dt, player.x, player.z);
+  syncMissionVisuals(dt);
   if (!player.vehicle) {
     playerVis.group.position.set(player.x, ground(player.x, player.z), player.z);
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
@@ -1067,6 +1389,22 @@ function updateHud(): void {
   starsEl.style.setProperty("--escape", String(wanted.escapeProgress()));
   bannerEl.textContent = banner.text;
   bannerEl.classList.toggle("show", banner.ttl > 0);
+  moneyEl.textContent = `$${save.money.toLocaleString("ru-RU")}`;
+  briefEl.classList.toggle("show", briefTimer > 0 && runner.active);
+  const left = runner.timeLeft;
+  const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
+  objectiveEl.innerHTML = runner.active ? `<b>${runner.mission!.title}</b> ${objectiveText}${timer ? ` <span class="${left! < 20 ? "hot" : ""}">${timer}</span>` : ""}` : "";
+  const targets: Record<string, { x: number; z: number }> = {};
+  for (const [key, mv] of missionCars) targets[key] = { x: mv.state.x, z: mv.state.z };
+  const goal = runner.active ? runner.objective(targets) : null;
+  if (goal) {
+    const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
+    const rel = Math.atan2(goal.z - player.z, goal.x - player.x) - camYaw;
+    const dist = Math.hypot(goal.x - player.x, goal.z - player.z);
+    arrowEl.style.display = "flex";
+    (arrowEl.firstElementChild as HTMLElement).style.transform = `rotate(${rel}rad)`;
+    (arrowEl.lastElementChild as HTMLElement).textContent = `${Math.round(dist)} м`;
+  } else arrowEl.style.display = "none";
   const blink = Math.floor(simTime * 4) % 2 === 0;
   const dots = vehicles.map((x) => ({
     x: x.state.x,
@@ -1082,7 +1420,16 @@ function updateHud(): void {
   }));
   for (const c of cops) dots.push({ x: c.ped.x, z: c.ped.z, color: "#3b7bff" });
   if (heli.active) dots.push({ x: heli.x, z: heli.z, color: blink ? "#ff3b3b" : "#ffffff" });
-  minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots);
+  const icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [
+    { ...PLACES.garage, color: "#7bed9f", label: "Г" },
+    { ...PLACES.paint, color: "#48dbfb", label: "П" },
+  ];
+  if (!runner.active) {
+    if (nextStory()) icons.push({ ...PLACES.contact, color: "#ffd32a", label: "!", clamp: true });
+    icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
+  }
+  if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", clamp: true });
+  minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots, icons);
 }
 
 // ---------------------------------------------------------------- loop
@@ -1147,6 +1494,15 @@ if (location.search.includes("debug")) {
     cops,
     police: () => vehicles.filter((v) => v.police).map((v) => ({ mode: v.police!.mode, x: Math.round(v.state.x), z: Math.round(v.state.z), d: Math.round(Math.hypot(v.state.x - player.x, v.state.z - player.z)), wrecked: v.state.wrecked })),
     bust: () => bustTimer,
+    flags: debugFlags,
+    runner,
+    save: () => save,
+    places: PLACES,
+    missionCars,
+    startMission: (id: string) => {
+      const m = [...STORY, RACE].find((x) => x.id === id);
+      if (m && !runner.active) startMission(m);
+    },
     perf,
     drawCalls: () => renderer.info.render.calls,
     start: () => $("#btn-start").click(),
