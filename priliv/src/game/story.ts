@@ -1,6 +1,7 @@
 import { PITCH, roadCoord } from "../world/city";
 import type { Mission, Point } from "./missions";
 import { LIGHTHOUSE } from "../world/island";
+import { REGATTA, REGATTA_TIME } from "../world/water";
 
 /** Fixed spots on the port island (roads there are not on the city grid). */
 export const ISLAND_SPOTS = {
@@ -63,6 +64,17 @@ export function raceRoute(n: number): Point[] {
 }
 
 export const RACE_TIME = 110;
+
+export function regattaMission(): Mission {
+  return {
+    id: "regatta",
+    title: "Регата",
+    brief: "Заезд на катере от городской пристани вокруг маяка к северной воде у моста.",
+    reward: 400,
+    time: REGATTA_TIME,
+    steps: [{ kind: "race", points: REGATTA, radius: 14, text: "Проходите буи на катере" }],
+  };
+}
 
 export function raceMission(n: number): Mission {
   return {

@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { Rng } from "./core/rng";
 import { Input } from "./core/input";
 import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
-import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, clampWorld, generateIsland, landAt } from "./world/island";
+import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, PIER_TOP, clampWorld, generateIsland, landAt } from "./world/island";
 import { buildIslandMeshes } from "./world/islandMesh";
 import { buildCityMeshes } from "./world/cityMesh";
 import { buildWalkGraph } from "./world/sidewalks";
@@ -20,7 +20,7 @@ import { lineOfSight, makeUnit, nearestIntersection, policeDrive, type PoliceUni
 import { Helicopter } from "./police/helicopter";
 import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData } from "./game/save";
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
-import { places, raceMission, storyMissions } from "./game/story";
+import { places, raceMission, regattaMission, storyMissions } from "./game/story";
 import { MOD_SHOP, SHOP, buy, makeCourierRun, makeTaxiFare, taxiFare, type TaxiFare } from "./game/jobs";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
@@ -29,6 +29,9 @@ import { Radio } from "./audio/radio";
 import { TouchControls, isTouchDevice } from "./ui/touch";
 import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
+import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
+import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
+import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, isBoatWater, routeOnWater, type Dock } from "./world/water";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 
@@ -86,6 +89,7 @@ const ground = (x: number, z: number) => {
   const l = land(x, z);
   if (l === "city") return surfaceHeight(layout.n, x, z);
   if (l === "water") return -1.2;
+  if (l === "pier") return PIER_TOP;
   return ISLAND_TOP;
 };
 
@@ -139,6 +143,39 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
   vehicles.push(v);
   return v;
 }
+
+// ---------------------------------------------------------------- boats
+
+interface Boat {
+  state: BoatState;
+  kind: string;
+  visual: BoatVisual;
+  input: BoatInput;
+  police: boolean;
+  /** Mooring the boat returns to when left alone far away. */
+  dock: Dock | null;
+  radius: number;
+  /** Police boats steer for this waypoint, refreshed a few times a second. */
+  aim: { x: number; z: number };
+  aimTimer: number;
+}
+
+const boats: Boat[] = [];
+const onWater = (x: number, z: number) => isBoatWater(x, z, WORLD_LIMIT);
+const foam = new ParticleSystem(700, false);
+scene.add(foam.mesh);
+
+function addBoat(kind: string, color: number, x: number, z: number, heading: number, dock: Dock | null, police = false): Boat {
+  const spec = BOAT_SPECS[kind];
+  const visual = buildBoatVisual(kind, spec, color);
+  scene.add(visual.group);
+  const b: Boat = { state: makeBoat(x, z, heading), kind, visual, input: { throttle: 0, steer: 0 }, police, dock, radius: spec.length * 0.42, aim: { x, z }, aimTimer: 0 };
+  boats.push(b);
+  return b;
+}
+
+for (const d of DOCKS) addBoat(d.kind, d.color, d.x, d.z, d.heading, d);
+let policeBoat: Boat | null = null;
 
 /** Turn a long-dead wreck back into a fresh traffic car so the city keeps moving. */
 function recycleAsTraffic(v: Vehicle): void {
@@ -350,6 +387,7 @@ function policeCanSee(x: number, z: number, range = 65): boolean {
     if (c.leaving || c.ped.state === "down" || c.ped.state === "gone") continue;
     if (Math.hypot(c.ped.x - x, c.ped.z - z) < 35) return true;
   }
+  if (policeBoat && !policeBoat.state.sunk && Math.hypot(policeBoat.state.x - x, policeBoat.state.z - z) < 90) return true;
   return heli.active && heli.distanceTo(x, z) < 90;
 }
 
@@ -485,6 +523,9 @@ function managePolice(dt: number): void {
           if (isActivePolice(v) && v.police!.mode !== "patrol" && Math.hypot(v.state.x - player.x, v.state.z - player.z) < 6) grabbing = true;
         }
       }
+    } else if (player.boat) {
+      const pb = policeBoat;
+      if (pb && !pb.state.sunk && boatSpeed(player.boat.state) < 2 && Math.hypot(pb.state.x - player.x, pb.state.z - player.z) < 8) grabbing = true;
     } else {
       for (const c of cops) {
         if (!c.leaving && c.ped.state !== "down" && Math.hypot(c.ped.x - player.x, c.ped.z - player.z) < 1.3) grabbing = true;
@@ -510,14 +551,20 @@ function stepCops(dt: number): void {
       continue;
     }
     // A cop gives up on foot once the player drives off.
-    if (player.vehicle && speedOf(player.vehicle.state) > 9 && d > 25) c.leaving = true;
+    if (((player.vehicle && speedOf(player.vehicle.state) > 9) || player.boat) && d > 25) c.leaving = true;
     const away = c.leaving || player.dead > 0;
     const ang = away ? Math.atan2(p.z - player.z, p.x - player.x) : Math.atan2(player.z - p.z, player.x - p.x);
     p.heading = ang;
     const target = away ? 3 : d < 1.1 ? 0 : 6.4;
     p.speed += (target - p.speed) * Math.min(1, dt * 6);
+    const ox = p.x;
+    const oz = p.z;
     p.x += Math.cos(ang) * p.speed * dt;
     p.z += Math.sin(ang) * p.speed * dt;
+    if (land(p.x, p.z) === "water") {
+      p.x = ox;
+      p.z = oz;
+    }
     const push = collide(p.x, p.z);
     if (push) {
       p.x += push.x;
@@ -606,7 +653,7 @@ function recyclePeds(budget: number, minD = PED_NEAR): void {
 
 const playerVis = buildPedestrian(0x2e86de, 0x2d3436);
 scene.add(playerVis.group);
-const player = { x: 0, z: 0, heading: 0, speed: 0, vehicle: null as Vehicle | null, health: 100, dead: 0 };
+const player = { x: 0, z: 0, heading: 0, speed: 0, vehicle: null as Vehicle | null, boat: null as Boat | null, health: 100, dead: 0 };
 
 /** Home is the sidewalk outside the garage. */
 function placeAtStart(): void {
@@ -718,6 +765,7 @@ function setPaused(on: boolean): void {
       `<dt>Деньги</dt><dd>$${save.money.toLocaleString("ru-RU")}</dd>` +
       `<dt>Сюжет</dt><dd>${save.missionsDone.length} из ${story}</dd>` +
       `<dt>Лучший круг</dt><dd>${save.bestRace ? save.bestRace.toFixed(1) + " с" : "—"}</dd>` +
+      `<dt>Лучшая регата</dt><dd>${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
     $("#btn-new").textContent = "Новая игра";
@@ -825,6 +873,53 @@ function exitVehicle(): void {
   playerVis.group.visible = true;
 }
 
+function nearestBoat(): Boat | null {
+  let best: Boat | null = null;
+  let bestD = 5.5;
+  for (const b of boats) {
+    if (b.state.sunk || b.police) continue;
+    const d = Math.hypot(b.state.x - player.x, b.state.z - player.z);
+    if (d < bestD) {
+      bestD = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function enterBoat(b: Boat): void {
+  player.boat = b;
+  playerVis.group.visible = false;
+}
+
+/** Firm ground beside the boat to step onto, if the boat is close enough to a shore or pier. */
+function landingSpot(b: Boat): { x: number; z: number } | null {
+  const s = b.state;
+  const spec = BOAT_SPECS[b.kind];
+  for (const gap of [1.5, 2.5, 3.5, 4.5]) {
+    for (const [off, half] of [[Math.PI / 2, spec.width / 2], [-Math.PI / 2, spec.width / 2], [0, spec.length / 2], [Math.PI, spec.length / 2]] as const) {
+      const x = s.x + Math.cos(s.heading + off) * (half + gap);
+      const z = s.z + Math.sin(s.heading + off) * (half + gap);
+      if (land(x, z) !== "water" && !resolveCircleVsBuildings(layout, x, z, 0.45)) return { x, z };
+    }
+  }
+  return null;
+}
+
+function exitBoat(): boolean {
+  const b = player.boat;
+  if (!b) return false;
+  const spot = landingSpot(b);
+  if (!spot) return false;
+  player.x = spot.x;
+  player.z = spot.z;
+  player.heading = b.state.heading;
+  player.boat = null;
+  b.input = { throttle: 0, steer: 0 };
+  playerVis.group.visible = true;
+  return true;
+}
+
 function obstaclesFor(self: Vehicle): Obstacle[] {
   const list: Obstacle[] = [];
   for (const v of vehicles) {
@@ -878,6 +973,7 @@ function arrestPlayer(): void {
     player.vehicle.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
     player.speed = 0;
   }
+  if (player.boat) player.boat.input = { throttle: 0, steer: 0 };
   wanted.clear();
   standDown();
   bustTimer = 0;
@@ -886,7 +982,7 @@ function arrestPlayer(): void {
   save.money -= fine;
   save.stats.arrests++;
   persist();
-  showOverlay("Задержаны", `Штраф $${fine}. Розыск снят, машина конфискована.`);
+  showOverlay("Задержаны", `Штраф $${fine}. Розыск снят, ${player.boat ? "катер конфискован" : "машина конфискована"}.`);
 }
 
 function respawnPlayer(): void {
@@ -896,6 +992,8 @@ function respawnPlayer(): void {
   player.dead = 0;
   player.health = 100;
   player.vehicle = null;
+  if (player.boat) player.boat.input = { throttle: 0, steer: 0 };
+  player.boat = null;
   player.speed = 0;
   playerVis.group.visible = true;
   placeAtStart();
@@ -927,6 +1025,10 @@ function explode(x: number, z: number, source: Vehicle | null): void {
   if (source) {
     source.state.vx *= 0.3;
     source.state.vz *= 0.3;
+  }
+  for (const b of boats) {
+    const d = Math.hypot(b.state.x - x, b.state.z - z);
+    if (d < 10 && !b.state.sunk) b.state.health -= (10 - d) * 14;
   }
   for (const v of vehicles) {
     if (v === source) continue;
@@ -965,10 +1067,12 @@ function explode(x: number, z: number, source: Vehicle | null): void {
 
 const STORY = storyMissions(layout.n);
 const RACE = raceMission(layout.n);
+const REGATTA_M = regattaMission();
 const runner = new MissionRunner();
 const missionCars = new Map<string, Vehicle>();
 const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4);
 const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5);
+const regattaMarker = new ZoneMarker(scene, 0x00d2d3, "Л", 7);
 const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5);
 const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
 const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4);
@@ -984,7 +1088,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, garage: false, paint: false, shop: false, depot: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -1085,13 +1189,17 @@ function handleMissionEvents(events: MissionEvent[]): void {
           const best = save.bestRace === null || e.time < save.bestRace;
           if (best) save.bestRace = e.time;
           extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
+        } else if (e.mission.id === REGATTA_M.id) {
+          const best = save.bestRegatta === null || e.time < save.bestRegatta;
+          if (best) save.bestRegatta = e.time;
+          extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
         } else if (e.mission.id !== "courier" && !save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
         persist();
         endMission();
         showBanner(`Миссия выполнена: +$${e.reward}${extra}`);
-        if (!nextStory() && e.mission.id !== RACE.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
+        if (!nextStory() && e.mission.id !== RACE.id && e.mission.id !== REGATTA_M.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
         break;
       }
       case "fail": {
@@ -1134,7 +1242,15 @@ function updateMissions(dt: number): void {
     }
     handleMissionEvents(
       runner.update(
-        { x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, speed: v ? speedOf(v.state) : player.speed, destroyed, targets: positions },
+        {
+          x: player.x,
+          z: player.z,
+          vehicle: v ? v.missionKey ?? "any" : player.boat ? "boat" : null,
+          stars: wanted.level,
+          speed: v ? speedOf(v.state) : player.boat ? boatSpeed(player.boat.state) : player.speed,
+          destroyed,
+          targets: positions,
+        },
         dt,
       ),
     );
@@ -1143,6 +1259,7 @@ function updateMissions(dt: number): void {
     const at = story?.contact ?? PLACES.contact;
     if (story && entered("contact", at.x, at.z, 5, slow)) startMission(story);
     else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) startMission(RACE);
+    else if (entered("regatta", MARINA.x, MARINA.z, 8, !!player.boat && boatSpeed(player.boat.state) < 6)) startMission(REGATTA_M);
   }
 
   // A mission that just ended in a zone must not also trigger it; wait until the player leaves.
@@ -1170,6 +1287,7 @@ function updateMissions(dt: number): void {
   }
   if (v && !runner.active && v.kind === "taxi" && input.justPressed("KeyJ")) startTaxiShift();
   if (taxi && runner.active && runner.mission?.id === "taxi" && (!v || v.kind !== "taxi")) failMission("вы вышли из такси");
+  if (runner.mission?.id === REGATTA_M.id && !player.boat) failMission("вы покинули катер");
 
   autosaveTimer -= dt;
   if (autosaveTimer <= 0) {
@@ -1332,6 +1450,8 @@ function syncMissionVisuals(dt: number): void {
   else contactMarker.hide();
   if (!runner.active) raceMarker.show(PLACES.race.x, PLACES.race.z);
   else raceMarker.hide();
+  if (!runner.active) regattaMarker.show(MARINA.x, MARINA.z);
+  else regattaMarker.hide();
   if (!runner.active) depotMarker.show(PLACES.depot.x, PLACES.depot.z);
   else depotMarker.hide();
   goalMarker.hide();
@@ -1358,17 +1478,146 @@ function syncMissionVisuals(dt: number): void {
     const color = step.kind === "destroy" ? 0xff4d6d : step.kind === "tail" ? 0x74b9ff : 0x7bed9f;
     if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, color, dt);
   }
-  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- simulation
 
 let lastCrash = 0;
+let dockTimer = 0;
+
+/** Bring in a police boat once the player flees by water with two stars or more; send it home after. */
+function managePoliceBoat(): void {
+  const pb = policeBoat;
+  if (!pb) {
+    if (!player.boat || wanted.level < 2 || player.dead > 0) return;
+    const spawn = POLICE_BOAT_SPAWNS.map((p) => ({ p, d: Math.hypot(p.x - player.x, p.z - player.z) }))
+      .filter((o) => o.d > 90)
+      .sort((a, b) => a.d - b.d)[0];
+    if (!spawn) return;
+    policeBoat = addBoat("police", 0x1e3799, spawn.p.x, spawn.p.z, Math.atan2(player.z - spawn.p.z, player.x - spawn.p.x), null, true);
+    return;
+  }
+  const d = Math.hypot(pb.state.x - player.x, pb.state.z - player.z);
+  if (((wanted.level === 0 || !player.boat) && d > 80) || (pb.state.sunk && d > 60)) {
+    scene.remove(pb.visual.group);
+    boats.splice(boats.indexOf(pb), 1);
+    policeBoat = null;
+  }
+}
+
+function stepBoats(dt: number, now: number): void {
+  managePoliceBoat();
+  for (const b of boats) {
+    const s = b.state;
+    const spec = BOAT_SPECS[b.kind];
+    if (b.police) {
+      const target = player.boat && !player.dead && wanted.level > 0 ? player.boat.state : null;
+      if (target && !s.sunk) {
+        b.aimTimer -= dt;
+        if (b.aimTimer <= 0) {
+          b.aim = routeOnWater(s, target, onWater);
+          b.aimTimer = 0.4;
+        }
+        // Straight at the player when in sight, else via the waterway nodes.
+        b.input = chaseBoat(s, b.aim === target ? target : { x: b.aim.x, z: b.aim.z, vx: 0, vz: 0 }, onWater);
+      } else b.input = { throttle: 0, steer: 0 };
+    } else if (b !== player.boat) {
+      b.input.throttle = 0;
+      b.input.steer = 0;
+    }
+    const px = s.x;
+    const pz = s.z;
+    const ph = s.heading;
+    stepBoat(s, spec, b.input, dt);
+    const hit = keepOnWater(s, spec, px, pz, ph, onWater);
+    if (hit > 0) {
+      s.health -= boatImpactDamage(hit);
+      if (b === player.boat && hit > 4 && now - lastCrash > 250) {
+        audio.crash(hit * 1.5);
+        shake = Math.max(shake, Math.min(0.6, hit * 0.03));
+        lastCrash = now;
+      }
+    }
+    // Wake behind the motor and spray off the bow.
+    const sp = boatSpeed(s);
+    if (!s.sunk && sp > 3 && Math.hypot(s.x - player.x, s.z - player.z) < 140) {
+      const n = Math.floor(sp * dt * 2.5 + Math.random());
+      const cx = Math.cos(s.heading);
+      const cz = Math.sin(s.heading);
+      for (let i = 0; i < n; i++) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        foam.emit({
+          x: s.x - cx * spec.length * 0.55,
+          y: 0.05,
+          z: s.z - cz * spec.length * 0.55,
+          vx: -cz * side * 1.2 - s.vx * 0.05,
+          vy: 0,
+          vz: cx * side * 1.2 - s.vz * 0.05,
+          spread: 0.5,
+          life: 1.6,
+          size0: 0.5,
+          size1: 2,
+          color: 0xffffff,
+          color1: 0xbfdcec,
+          alpha: 0.32,
+          drag: 1.2,
+        });
+      }
+      if (sp > 12 && Math.random() < dt * sp * 0.6) {
+        foam.emit({ x: s.x + cx * spec.length * 0.4, y: 0.4, z: s.z + cz * spec.length * 0.4, vx: -cz * 2, vy: 2.5, vz: cx * 2, spread: 1.5, life: 0.7, size0: 0.4, size1: 1.2, color: 0xffffff, alpha: 0.7, gravity: 9 });
+      }
+    }
+    if (!s.sunk && s.health <= 0) {
+      s.sunk = true;
+      s.health = 0;
+      for (let i = 0; i < 20; i++) foam.emit({ x: s.x, y: 0.2, z: s.z, vy: 1.5, spread: 3, life: 2.5, size0: 1, size1: 4, color: 0xffffff, alpha: 0.6, drag: 1 });
+      if (Math.hypot(s.x - player.x, s.z - player.z) < 80) audio.crash(20);
+      if (b === player.boat) killPlayer("Катер затонул");
+    }
+  }
+  for (let i = 0; i < boats.length; i++) {
+    for (let j = i + 1; j < boats.length; j++) {
+      const a = boats[i];
+      const c = boats[j];
+      if (a.state.sunk || c.state.sunk) continue;
+      const closing = separateBoats(a.state, c.state, a.radius, c.radius);
+      if (closing <= 0) continue;
+      const dmg = boatImpactDamage(closing);
+      a.state.health -= dmg;
+      c.state.health -= dmg;
+      if ((a === player.boat || c === player.boat) && closing > 3 && now - lastCrash > 250) {
+        audio.crash(closing * 1.5);
+        shake = Math.max(shake, Math.min(0.6, closing * 0.04));
+        lastCrash = now;
+      }
+    }
+  }
+  if (player.boat) {
+    player.x = player.boat.state.x;
+    player.z = player.boat.state.z;
+    player.heading = player.boat.state.heading;
+  }
+  // Boats left adrift far from the player drift back to their moorings.
+  dockTimer -= dt;
+  if (dockTimer <= 0) {
+    dockTimer = 2;
+    for (const b of boats) {
+      const d = b.dock;
+      if (!d || b === player.boat) continue;
+      const moved = b.state.sunk || Math.hypot(b.state.x - d.x, b.state.z - d.z) > 3;
+      const unseen = Math.hypot(player.x - d.x, player.z - d.z) > 110 && Math.hypot(player.x - b.state.x, player.z - b.state.z) > 110;
+      if (moved && unseen) b.state = makeBoat(d.x, d.z, d.heading);
+    }
+  }
+}
 let recycleTimer = 0;
 
 function playerTarget() {
   const v = player.vehicle;
   if (v) return { x: v.state.x, z: v.state.z, vx: v.state.vx, vz: v.state.vz };
+  const b = player.boat;
+  if (b) return { x: b.state.x, z: b.state.z, vx: b.state.vx, vz: b.state.vz };
   return { x: player.x, z: player.z, vx: Math.cos(player.heading) * player.speed, vz: Math.sin(player.heading) * player.speed };
 }
 
@@ -1419,6 +1668,11 @@ function update(dt: number, now: number): void {
       if (player.health <= 0) killPlayer();
     }
     if (input.justPressed("KeyE", "KeyF") && speedOf(v.state) < 6) exitVehicle();
+  } else if (player.boat) {
+    const b = player.boat;
+    b.input.throttle = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
+    b.input.steer = input.mixed(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"], input.analog.x);
+    if (input.justPressed("KeyE", "KeyF") && boatSpeed(b.state) < 4 && !exitBoat()) showBanner("Подплывите ближе к берегу или причалу");
   } else {
     const stickMag = Math.hypot(input.analog.x, input.analog.y);
     const run = input.isDown("ShiftLeft", "ShiftRight") || stickMag > 0.92;
@@ -1467,7 +1721,13 @@ function update(dt: number, now: number): void {
       }
     }
     const near = nearestEnterable();
-    if (near && input.justPressed("KeyE", "KeyF")) enterVehicle(near);
+    const boat = nearestBoat();
+    if (input.justPressed("KeyE", "KeyF")) {
+      const dCar = near ? Math.hypot(near.state.x - player.x, near.state.z - player.z) : Infinity;
+      const dBoat = boat ? Math.hypot(boat.state.x - player.x, boat.state.z - player.z) : Infinity;
+      if (boat && dBoat < dCar) enterBoat(boat);
+      else if (near) enterVehicle(near);
+    }
   }
 
   // Vehicles.
@@ -1504,7 +1764,16 @@ function update(dt: number, now: number): void {
       v.wreckAge += dt;
     }
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
+    const prevX = s.x;
+    const prevZ = s.z;
     stepCar(s, moddedSpec(specFor(v.kind), v.mods), v.input, dt);
+    // Drivers other than the player stop at the water's edge (police chasing a boat, mostly).
+    if (v !== player.vehicle && !s.wrecked && land(s.x, s.z) === "water" && land(prevX, prevZ) !== "water") {
+      s.x = prevX;
+      s.z = prevZ;
+      s.vx = 0;
+      s.vz = 0;
+    }
     const push = resolveCircleVsBuildings(layout, s.x, s.z, v.radius * 0.85);
     if (push) {
       const hpBefore = s.health;
@@ -1645,13 +1914,16 @@ function update(dt: number, now: number): void {
     }
   }
 
+  stepBoats(dt, now);
   if (player.vehicle) {
     player.x = player.vehicle.state.x;
     player.z = player.vehicle.state.z;
   }
   audio.horn(input.isDown("KeyH") && player.vehicle !== null && !player.dead);
   const pv = player.dead ? null : player.vehicle;
-  audio.engine(pv ? speedOf(pv.state) : 0, pv ? Math.max(0, pv.input.throttle) : 0, pv !== null && !pv.state.wrecked, dt);
+  const pb = player.dead ? null : player.boat;
+  if (pb) audio.engine(boatSpeed(pb.state) * 0.8, Math.abs(pb.input.throttle), !pb.state.sunk, dt);
+  else audio.engine(pv ? speedOf(pv.state) : 0, pv ? Math.max(0, pv.input.throttle) : 0, pv !== null && !pv.state.wrecked, dt);
   audio.screech(pv ? Math.abs(lateralSpeed(pv.state)) + (pv.input.handbrake && speedOf(pv.state) > 6 ? 4 : 0) : 0);
   let sirenD = Infinity;
   for (const v of vehicles) {
@@ -1681,6 +1953,14 @@ function updateCamera(dt: number): void {
     tz = v.state.z;
     dist = cameraMode === 0 ? 9 + sp * 0.12 : 22;
     height = cameraMode === 0 ? 3.6 + sp * 0.03 : 20;
+  } else if (player.boat) {
+    const b = player.boat.state;
+    const sp = boatSpeed(b);
+    heading = sp < 2 || boatForward(b) < 0 ? b.heading : Math.atan2(b.vz, b.vx);
+    tx = b.x;
+    tz = b.z;
+    dist = cameraMode === 0 ? 11 + sp * 0.12 : 26;
+    height = cameraMode === 0 ? 4.4 + sp * 0.03 : 22;
   } else {
     heading = player.heading;
     tx = player.x;
@@ -1693,7 +1973,7 @@ function updateCamera(dt: number): void {
     height += 8;
   }
   const want = new THREE.Vector3(tx - Math.cos(heading) * dist, height, tz - Math.sin(heading) * dist);
-  const k = 1 - Math.exp(-dt * (v ? 4 : 6));
+  const k = 1 - Math.exp(-dt * (v || player.boat ? 4 : 6));
   camPos.lerp(want, k);
   const push = resolveCircleVsBuildings(layout, camPos.x, camPos.z, 0.5);
   if (push) {
@@ -1798,24 +2078,33 @@ function syncVisuals(dt: number): void {
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
     animatePedestrian(playerVis, player.dead > 0 ? 0 : player.speed, dt, player.dead > 0 ? 1 : 0);
   }
+  for (const b of boats) syncBoatVisual(b.visual, b.state, dt, simTime, b.police && wanted.level > 0);
   smoke.update(dt);
   fire.update(dt);
+  foam.update(dt);
   flash.intensity *= Math.exp(-dt * 7);
 }
 
 function updateHud(): void {
   const v = player.vehicle;
-  speedEl.textContent = v ? String(Math.round(speedOf(v.state) * 3.6)) : "—";
+  const boat = player.boat;
+  speedEl.textContent = v ? String(Math.round(speedOf(v.state) * 3.6)) : boat ? String(Math.round(boatSpeed(boat.state) * 3.6)) : "—";
   healthEl.style.width = `${Math.max(0, player.health)}%`;
-  carHpWrap.style.display = v ? "block" : "none";
+  carHpWrap.style.display = v || boat ? "block" : "none";
   if (v) carHpEl.style.width = `${v.state.health}%`;
+  else if (boat) carHpEl.style.width = `${Math.max(0, boat.state.health)}%`;
   if (player.dead > 0) hintEl.textContent = "";
   else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? k("Машина горит! E — выйти", "Машина горит! Жмите «Сесть», чтобы выйти") : "Машина горит! Тормозите и выходите";
   else if (v && v.kind === "taxi" && !runner.active) hintEl.textContent = k("J — начать смену такси", "Жмите «Работа», чтобы взять заказы");
   else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал · R — радио" : "Пробел — ручник · C — камера";
+  else if (boat) {
+    const docked = boatSpeed(boat.state) < 4 && landingSpot(boat) !== null;
+    hintEl.textContent = docked ? k("E — сойти на берег", "Жмите «Сесть», чтобы сойти") : touch.enabled ? "" : "W/S — газ и назад · A/D — руль · сойти можно у берега";
+  }
   else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
+  else if (nearestBoat() && !nearestEnterable()) hintEl.textContent = k("E — сесть в катер", "Жмите «Сесть»");
   else hintEl.textContent = nearestEnterable() ? k("E — сесть в машину", "Жмите «Сесть»") : touch.enabled ? "" : "WASD — идти · Shift — бежать";
-  touch.setMode(!!v, !!nearestEnterable(), !!v && v.kind === "taxi" && !runner.active);
+  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active);
   hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
   const stars = starsEl.children;
   for (let i = 0; i < stars.length; i++) stars[i].classList.toggle("on", i < wanted.level);
@@ -1865,6 +2154,10 @@ function updateHud(): void {
       : "#74b9ff",
   }));
   for (const c of cops) dots.push({ x: c.ped.x, z: c.ped.z, color: "#3b7bff" });
+  for (const b of boats) {
+    if (b.state.sunk) continue;
+    dots.push({ x: b.state.x, z: b.state.z, color: b === player.boat ? "#ffd32a" : b.police ? (blink ? "#ff3b3b" : "#3b7bff") : "#81ecec" });
+  }
   if (heli.active) dots.push({ x: heli.x, z: heli.z, color: blink ? "#ff3b3b" : "#ffffff" });
   const icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [
     { ...PLACES.garage, color: "#7bed9f", label: "Г" },
@@ -1876,11 +2169,12 @@ function updateHud(): void {
     if (next) icons.push({ ...(next.contact ?? PLACES.contact), color: "#ffd32a", label: "!", clamp: true });
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
+    icons.push({ ...MARINA, color: "#00d2d3", label: "Л" });
   }
   const cur = runner.currentStep;
   if (cur?.kind === "collect") cur.points.forEach((p, i) => !runner.collected[i] && icons.push({ ...p, color: "#55efc4", label: "◆" }));
   if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", clamp: true });
-  minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots, icons);
+  minimap.draw(player.x, player.z, v ? v.state.heading : player.boat ? player.boat.state.heading : player.heading, dots, icons);
 }
 
 // ---------------------------------------------------------------- loop
@@ -1957,11 +2251,14 @@ if (location.search.includes("debug")) {
     save: () => save,
     places: PLACES,
     missionCars,
+    boats,
+    policeBoat: () => policeBoat,
+    enterBoat: (i: number) => enterBoat(boats[i]),
     taxi: () => taxi,
     land,
     openShop,
     startMission: (id: string) => {
-      const m = [...STORY, RACE].find((x) => x.id === id);
+      const m = [...STORY, RACE, REGATTA_M].find((x) => x.id === id);
       if (m && !runner.active) startMission(m);
     },
     perf,

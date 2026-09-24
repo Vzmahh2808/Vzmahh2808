@@ -14,6 +14,8 @@ export interface SaveData {
   missionsDone: string[];
   garage: GarageCar[];
   bestRace: number | null;
+  /** Best regatta time in seconds. */
+  bestRegatta: number | null;
   muted: boolean;
   /** Radio station index, -1 for off. */
   radio: number;
@@ -37,6 +39,7 @@ export function freshSave(): SaveData {
     missionsDone: [],
     garage: [],
     bestRace: null,
+    bestRegatta: null,
     muted: false,
     radio: 0,
     clock: 17,
@@ -80,6 +83,7 @@ export function parseSave(raw: string | null): SaveData | null {
           .slice(0, GARAGE_SLOTS)
       : [],
     bestRace: typeof data.bestRace === "number" && data.bestRace > 0 ? data.bestRace : null,
+    bestRegatta: typeof data.bestRegatta === "number" && data.bestRegatta > 0 ? data.bestRegatta : null,
     muted: data.muted === true,
     radio: typeof data.radio === "number" && data.radio >= -1 && data.radio <= 2 ? Math.floor(data.radio) : base.radio,
     clock: typeof data.clock === "number" && data.clock >= 0 && data.clock < 24 ? data.clock : base.clock,
