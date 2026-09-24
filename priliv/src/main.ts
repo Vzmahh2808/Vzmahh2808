@@ -21,6 +21,7 @@ import { Helicopter } from "./police/helicopter";
 import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData } from "./game/save";
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
 import { places, raceMission, regattaMission, storyMissions } from "./game/story";
+import { RIVAL_COLORS, RIVAL_NAMES, RaceStandings, gridSlot, makeRacer, racerInput, raceCheckpoints, streetRaceMission, tracks, type Racer, type Track } from "./game/streetRace";
 import { MOD_SHOP, SHOP, buy, makeCourierRun, makeTaxiFare, taxiFare, type TaxiFare } from "./game/jobs";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
@@ -766,6 +767,7 @@ function setPaused(on: boolean): void {
       `<dt>Сюжет</dt><dd>${save.missionsDone.length} из ${story}</dd>` +
       `<dt>Лучший круг</dt><dd>${save.bestRace ? save.bestRace.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Лучшая регата</dt><dd>${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "—"}</dd>` +
+      `<dt>Победы в гонках</dt><dd>${save.stats.racesWon}</dd>` +
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
     $("#btn-new").textContent = "Новая игра";
@@ -1165,6 +1167,18 @@ function handleMissionEvents(events: MissionEvent[]): void {
         audio.alert();
         break;
       case "done": {
+        if (street && e.mission === street.mission) {
+          const place = street.standings.place("player", racePositions());
+          const prize = street.track.prizes[place - 1] ?? 0;
+          if (prize) addMoney(prize);
+          if (place === 1) save.stats.racesWon++;
+          persist();
+          endStreetRace();
+          endMission();
+          audio.alert();
+          showBanner(prize ? `${place} место из 4 · +$${prize}` : "4 место из 4 · без приза");
+          break;
+        }
         if (e.mission.id === "taxi" && taxi?.fare) {
           const pay = taxiFare(taxi.fare.distance, (e.mission.time ?? 0) - e.time, e.mission.time ?? 0);
           addMoney(pay);
@@ -1203,6 +1217,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
         break;
       }
       case "fail": {
+        endStreetRace();
         // A rigged car goes up with the mission.
         const rigged = e.explode ? missionCars.get(e.explode) : undefined;
         if (rigged && !rigged.state.wrecked) {
@@ -1258,7 +1273,7 @@ function updateMissions(dt: number): void {
     const story = nextStory();
     const at = story?.contact ?? PLACES.contact;
     if (story && entered("contact", at.x, at.z, 5, slow)) startMission(story);
-    else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) startMission(RACE);
+    else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) openRaceMenu();
     else if (entered("regatta", MARINA.x, MARINA.z, 8, !!player.boat && boatSpeed(player.boat.state) < 6)) startMission(REGATTA_M);
   }
 
@@ -1481,6 +1496,139 @@ function syncMissionVisuals(dt: number): void {
   for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
 }
 
+// ---------------------------------------------------------------- street races
+
+const TRACKS = tracks(layout.n);
+
+interface Rival {
+  v: Vehicle;
+  r: Racer;
+  id: string;
+  name: string;
+}
+
+interface StreetRace {
+  track: Track;
+  mission: Mission;
+  points: Array<{ x: number; z: number }>;
+  standings: RaceStandings;
+  rivals: Rival[];
+  countdown: number;
+}
+
+let street: StreetRace | null = null;
+/** Rival cars left on the road after a race, removed once out of sight. */
+const leftoverRivals: Vehicle[] = [];
+
+function openRaceMenu(): void {
+  const v = player.vehicle;
+  openMenu("Гонки", [
+    {
+      label: "Заезд на время",
+      note: `в одиночку, рекорд ${save.bestRace ? save.bestRace.toFixed(1) + " с" : "не установлен"}`,
+      action: () => {
+        closeMenu();
+        startMission(RACE);
+      },
+    },
+    ...TRACKS.map((t) => ({
+      label: `${t.name} — против троих`,
+      note: `${t.note}; призы $${t.prizes.join(" / $")}`,
+      price: t.fee,
+      action: () => {
+        if (save.money < t.fee || !v || player.vehicle !== v) return;
+        closeMenu();
+        startStreetRace(t, v);
+      },
+    })),
+  ]);
+}
+
+function startStreetRace(t: Track, v: Vehicle): void {
+  addMoney(-t.fee);
+  // Clear the grid of traffic and parked cars.
+  const slots = [0, 1, 2, 3].map((i) => gridSlot(t, i));
+  for (const o of vehicles) {
+    if (o === v || o.police || o.garaged || o.missionKey) continue;
+    if (slots.some((g) => Math.hypot(o.state.x - g.x, o.state.z - g.z) < 14)) recycleAsTraffic(o);
+  }
+  const place = (car: Vehicle, g: { x: number; z: number; heading: number }) => {
+    const s = car.state;
+    s.x = g.x;
+    s.z = g.z;
+    s.heading = g.heading;
+    s.vx = s.vz = 0;
+    s.steer = 0;
+    car.rearPrev = null;
+  };
+  place(v, slots[3]);
+  player.x = v.state.x;
+  player.z = v.state.z;
+  camPos.set(v.state.x - Math.cos(t.heading) * 9, 4, v.state.z - Math.sin(t.heading) * 9);
+  // Rivals drive the same class of car as the player, with the same upgrades.
+  const rivals: Rival[] = [0, 1, 2].map((i) => {
+    const car = addVehicle(makeCar(0, 0, 0), v.kind === "police" ? "sport" : v.kind, RIVAL_COLORS[i], null);
+    car.mods = { ...v.mods };
+    place(car, slots[i]);
+    return { v: car, r: makeRacer([-1.4, 1.4, 0][i], [0.55, 0.75, 0.95][i]), id: `r${i}`, name: RIVAL_NAMES[i] };
+  });
+  const mission = streetRaceMission(t);
+  mission.time = t.time + 3;
+  const points = raceCheckpoints(t);
+  street = { track: t, mission, points, standings: new RaceStandings(["player", ...rivals.map((r) => r.id)], points), rivals, countdown: 3.999 };
+  startMission(mission);
+  showBanner("3");
+}
+
+function racePositions(): Record<string, { x: number; z: number }> {
+  const pos: Record<string, { x: number; z: number }> = { player: { x: player.x, z: player.z } };
+  for (const r of street?.rivals ?? []) pos[r.id] = { x: r.v.state.x, z: r.v.state.z };
+  return pos;
+}
+
+function stepStreetRace(dt: number): void {
+  for (let i = leftoverRivals.length - 1; i >= 0; i--) {
+    const v = leftoverRivals[i];
+    if (v === player.vehicle || Math.hypot(v.state.x - player.x, v.state.z - player.z) < 120) continue;
+    scene.remove(v.visual.group);
+    vehicles.splice(vehicles.indexOf(v), 1);
+    leftoverRivals.splice(i, 1);
+  }
+  const st = street;
+  if (!st) return;
+  if (st.countdown > 0) {
+    const before = Math.ceil(st.countdown);
+    st.countdown -= dt;
+    const after = Math.ceil(st.countdown);
+    if (after !== before) {
+      showBanner(after > 0 ? String(after) : "Марш!");
+      audio.alert();
+    }
+  }
+  const t = runner.elapsed;
+  for (const r of st.rivals) {
+    const s = r.v.state;
+    if (st.countdown > 0 || s.wrecked || s.burning || r.v === player.vehicle) {
+      if (r.v !== player.vehicle) r.v.input = { throttle: 0, steer: 0, brake: false, handbrake: true };
+      continue;
+    }
+    const obstacles = obstaclesFor(r.v);
+    r.v.input = racerInput(s, moddedSpec(specFor(r.v.kind), r.v.mods), r.r, st.points, st.track.start, obstacles, dt);
+    st.standings.update(r.id, s.x, s.z, t);
+  }
+  if (player.vehicle) st.standings.update("player", player.x, player.z, t);
+}
+
+function endStreetRace(): void {
+  const st = street;
+  if (!st) return;
+  for (const r of st.rivals) {
+    if (r.v !== player.vehicle) r.v.input = { throttle: 0, steer: 0, brake: false, handbrake: true };
+    leftoverRivals.push(r.v);
+  }
+  street = null;
+}
+
 // ---------------------------------------------------------------- simulation
 
 let lastCrash = 0;
@@ -1661,6 +1809,10 @@ function update(dt: number, now: number): void {
     v.input.throttle = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
     v.input.steer = input.mixed(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"], input.analog.x);
     v.input.handbrake = input.isDown("Space");
+    if (street && street.countdown > 0) {
+      v.input.throttle = 0;
+      v.input.handbrake = true;
+    }
     v.input.brake = false;
     if (input.isDown("KeyH")) threats.push({ x: v.state.x, z: v.state.z, radius: 14 });
     if (v.state.burning) {
@@ -1890,6 +2042,7 @@ function update(dt: number, now: number): void {
   }
 
   stepCops(dt);
+  stepStreetRace(dt);
   managePolice(dt);
   updateMissions(dt);
 
@@ -2118,7 +2271,12 @@ function updateHud(): void {
   briefEl.classList.toggle("show", briefTimer > 0 && runner.active);
   const left = runner.timeLeft;
   const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
-  const jobTitle = taxi && runner.mission?.id === "taxi" ? `Такси · заказ ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
+  let jobTitle = taxi && runner.mission?.id === "taxi" ? `Такси · заказ ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
+  if (street && runner.mission === street.mission) {
+    const place = street.standings.place("player", racePositions());
+    const lap = Math.min(street.track.laps, Math.floor(runner.checkpoint / street.track.points.length) + 1);
+    jobTitle = `${street.track.name} · ${place} место из 4${street.track.laps > 1 ? ` · круг ${lap}/${street.track.laps}` : ""}`;
+  }
   const g = runner.gauge();
   const gaugeHtml = g
     ? `<div class="gauge"><i style="width:${Math.round(Math.min(1, g.value) * 100)}%"></i><em>${g.warn || g.label}</em></div>`
@@ -2147,6 +2305,7 @@ function updateHud(): void {
     color:
       x === v ? "#ffd32a"
       : x.state.wrecked ? "#555"
+      : street?.rivals.some((r) => r.v === x) ? "#fd79a8"
       : x.state.burning ? "#ff6b3a"
       : x.police && x.police.mode !== "patrol" ? (blink ? "#ff3b3b" : "#3b7bff")
       : x.police ? "#9ab8ff"
@@ -2253,6 +2412,8 @@ if (location.search.includes("debug")) {
     missionCars,
     boats,
     policeBoat: () => policeBoat,
+    street: () => street,
+    startStreetRace: (i: number) => player.vehicle && startStreetRace(TRACKS[i], player.vehicle),
     enterBoat: (i: number) => enterBoat(boats[i]),
     taxi: () => taxi,
     land,
