@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Сердце подземелья</title>
+    <meta name="description" content="Пошаговый рогалик в браузере: процедурные подземелья, монстры, предметы и таблица рекордов." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23141826'/%3E%3Ctext x='16' y='23' font-size='20' font-family='monospace' text-anchor='middle' fill='%23ffd32a'%3E@%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <span class="title">Сердце подземелья</span>
+        <span id="look" class="look"></span>
+        <div class="topbar-actions">
+          <button id="btn-explore" class="chip" title="Автоисследование (O)">Исследовать</button>
+          <button id="btn-inventory" class="chip" title="Инвентарь (I)">Рюкзак</button>
+          <button id="btn-sound" class="chip" title="Звук (M)">🔊</button>
+          <button id="btn-help" class="chip" title="Помощь (?)">?</button>
+          <button id="btn-menu" class="chip" title="Меню (Esc)">Меню</button>
+        </div>
+      </header>
+
+      <main id="stage">
+        <canvas id="view" aria-label="Карта подземелья"></canvas>
+        <div id="dpad" aria-label="Кнопки движения">
+          <button data-dir="-1,-1">↖</button><button data-dir="0,-1">↑</button><button data-dir="1,-1">↗</button>
+          <button data-dir="-1,0">←</button><button data-dir="0,0">·</button><button data-dir="1,0">→</button>
+          <button data-dir="-1,1">↙</button><button data-dir="0,1">↓</button><button data-dir="1,1">↘</button>
+        </div>
+        <div id="actions" aria-label="Действия">
+          <button data-act="pickup">Взять</button>
+          <button data-act="descend">Вниз</button>
+        </div>
+      </main>
+
+      <aside id="sidebar">
+        <section class="stats">
+          <div class="bar-row">
+            <span class="bar-label">HP</span>
+            <div class="bar"><div id="hp-bar" class="bar-fill hp"></div><span id="hp-text" class="bar-text"></span></div>
+          </div>
+          <div class="bar-row">
+            <span class="bar-label">XP</span>
+            <div class="bar"><div id="xp-bar" class="bar-fill xp"></div><span id="xp-text" class="bar-text"></span></div>
+          </div>
+          <dl class="grid">
+            <dt>Этаж</dt><dd id="st-depth"></dd>
+            <dt>Уровень</dt><dd id="st-level"></dd>
+            <dt>Урон</dt><dd id="st-atk"></dd>
+            <dt>Защита</dt><dd id="st-def"></dd>
+            <dt>Золото</dt><dd id="st-gold"></dd>
+            <dt>Ход</dt><dd id="st-turn"></dd>
+          </dl>
+          <div id="st-status" class="status"></div>
+        </section>
+        <section class="equipment">
+          <h3>Снаряжение</h3>
+          <div><span class="muted">Оружие:</span> <span id="eq-weapon"></span></div>
+          <div><span class="muted">Броня:</span> <span id="eq-armor"></span></div>
+        </section>
+        <section class="inventory">
+          <h3>Рюкзак <span id="inv-count" class="muted"></span></h3>
+          <ol id="inv-list"></ol>
+        </section>
+      </aside>
+
+      <footer id="log" aria-live="polite"></footer>
+
+      <div id="overlay" class="overlay hidden">
+        <div id="overlay-card" class="card"></div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
