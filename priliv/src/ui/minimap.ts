@@ -34,7 +34,13 @@ export class Minimap {
 
   private extent: number;
 
-  draw(px: number, pz: number, heading: number, dots: Array<{ x: number; z: number; color: string }>): void {
+  draw(
+    px: number,
+    pz: number,
+    heading: number,
+    dots: Array<{ x: number; z: number; color: string }>,
+    icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [],
+  ): void {
     const ctx = this.ctx;
     const S = this.size;
     ctx.clearRect(0, 0, S, S);
@@ -51,6 +57,29 @@ export class Minimap {
       if (dx < 0 || dz < 0 || dx > S || dz > S) continue;
       ctx.fillStyle = d.color;
       ctx.fillRect(dx - 1.5, dz - 1.5, 3, 3);
+    }
+    for (const ic of icons) {
+      let ix = (ic.x - px) * SCALE;
+      let iz = (ic.z - pz) * SCALE;
+      const r = Math.hypot(ix, iz);
+      const lim = S / 2 - 12;
+      if (r > lim) {
+        if (!ic.clamp) continue;
+        ix *= lim / r;
+        iz *= lim / r;
+      }
+      ctx.beginPath();
+      ctx.arc(S / 2 + ix, S / 2 + iz, 8, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(10,12,18,0.85)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = ic.color;
+      ctx.stroke();
+      ctx.fillStyle = ic.color;
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(ic.label, S / 2 + ix, S / 2 + iz + 0.5);
     }
     // Player arrow.
     ctx.translate(S / 2, S / 2);
