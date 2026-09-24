@@ -8,6 +8,8 @@ export class CarAudio {
   private filter: BiquadFilterNode | null = null;
   private hornOsc: OscillatorNode | null = null;
   private hornGain: GainNode | null = null;
+  private screechGain: GainNode | null = null;
+  private noiseBuf: AudioBuffer | null = null;
   muted = false;
 
   unlock(): void {
@@ -47,6 +49,75 @@ export class CarAudio {
     this.hornOsc.frequency.value = 420;
     this.hornOsc.connect(this.hornGain).connect(this.master);
     this.hornOsc.start();
+
+    // Tyre screech: looping band-passed noise, gain driven by slip.
+    const len = ctx.sampleRate;
+    this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = this.noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 2200;
+    bp.Q.value = 6;
+    this.screechGain = ctx.createGain();
+    this.screechGain.gain.value = 0;
+    src.connect(bp).connect(this.screechGain).connect(this.master);
+    src.start();
+  }
+
+  /** slip in m/s of sideways sliding; 0 silences the screech. */
+  screech(slip: number): void {
+    if (!this.screechGain || !this.ctx) return;
+    const g = this.muted ? 0 : Math.min(0.18, Math.max(0, slip - 3) * 0.025);
+    this.screechGain.gain.setTargetAtTime(g, this.ctx.currentTime, 0.05);
+  }
+
+  private burst(dur: number, freq: number, gain: number, delay = 0): void {
+    if (!this.ctx || !this.master || !this.noiseBuf || this.muted) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + delay;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.setValueAtTime(freq, t0);
+    f.frequency.exponentialRampToValueAtTime(Math.max(40, freq * 0.1), t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.05);
+  }
+
+  /** distance attenuates volume; 0 = right next to the listener. */
+  explosion(distance: number): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const k = Math.max(0.05, 1 - distance / 160);
+    this.burst(1.6, 2200, 0.9 * k);
+    this.burst(0.5, 6000, 0.35 * k, 0.02);
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.setValueAtTime(90, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(28, ctx.currentTime + 1.2);
+    g.gain.setValueAtTime(0.6 * k, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 1.3);
+    o.connect(g).connect(this.master);
+    o.start();
+    o.stop(ctx.currentTime + 1.4);
+  }
+
+  thud(): void {
+    this.burst(0.18, 500, 0.35);
+  }
+
+  ignite(): void {
+    this.burst(0.7, 1500, 0.25);
   }
 
   /** speed in m/s, throttle 0..1, driving = player is in a car. */
