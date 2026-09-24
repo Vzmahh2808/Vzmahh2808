@@ -95,3 +95,5 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
   #brief { bottom: 206px; }
   #goal-arrow { top: 122px; }
 }
+#clock { right: 20px; top: 96px; font-family: var(--mono); font-size: 14px; color: #dfe6f0; text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
+@media (max-width: 700px) { #clock { top: 88px; font-size: 12px; } }

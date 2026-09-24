@@ -14,6 +14,54 @@ export class CarAudio {
   private noiseBuf: AudioBuffer | null = null;
   muted = false;
 
+  /** Shared context for other sound sources such as the radio. */
+  node(): { ctx: AudioContext; master: GainNode } | null {
+    return this.ctx && this.master ? { ctx: this.ctx, master: this.master } : null;
+  }
+
+  /** Distant rolling thunder. */
+  thunder(delay: number): void {
+    if (!this.ctx || !this.master || !this.noiseBuf || this.muted) return;
+    const ctx = this.ctx;
+    const t0 = ctx.currentTime + delay;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.setValueAtTime(260, t0);
+    f.frequency.exponentialRampToValueAtTime(70, t0 + 2.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.6, t0 + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.2, t0 + 0.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 3);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t0);
+    src.stop(t0 + 3.1);
+  }
+
+  private rainGain: GainNode | null = null;
+
+  /** Continuous hiss of rain, 0..1. */
+  rain(intensity: number): void {
+    if (!this.ctx || !this.master || !this.noiseBuf) return;
+    if (!this.rainGain) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      const f = this.ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 5000;
+      f.Q.value = 0.4;
+      this.rainGain = this.ctx.createGain();
+      this.rainGain.gain.value = 0;
+      src.connect(f).connect(this.rainGain).connect(this.master);
+      src.start();
+    }
+    this.rainGain.gain.setTargetAtTime(this.muted ? 0 : intensity * 0.12, this.ctx.currentTime, 0.3);
+  }
+
   unlock(): void {
     if (this.ctx) {
       if (this.ctx.state === "suspended") void this.ctx.resume();

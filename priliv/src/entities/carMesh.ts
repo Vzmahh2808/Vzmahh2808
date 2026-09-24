@@ -15,6 +15,7 @@ export interface CarVisual {
   /** Police lightbar halves; absent on civilian cars. */
   sirenRed?: THREE.MeshStandardMaterial;
   sirenBlue?: THREE.MeshStandardMaterial;
+  beam: THREE.Mesh;
 }
 
 const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 12);
@@ -109,7 +110,11 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
     if (x > 0) frontWheels.push(pivot);
   }
 
-  const visual: CarVisual = { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake, head, body };
+  const beam = new THREE.Mesh(beamGeo, beamMaterial);
+  beam.position.set(L / 2 + 6, 0.22, 0);
+  beam.renderOrder = 1;
+  g.add(beam);
+  const visual: CarVisual = { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake, head, body, beam };
   if (kind === "police") {
     const roofY = 0.45 + chassisH + cabH;
     const stripeMat = new THREE.MeshStandardMaterial({ color: 0x1b3a8a, roughness: 0.5 });
@@ -137,6 +142,40 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
 
 const CHAR = new THREE.Color(0x1d1b1a);
 
+function beamTexture(): THREE.Texture {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 128;
+  const g = c.getContext("2d")!;
+  // Elongated glow: bright near the bumper, fading ahead and to the sides.
+  const grad = g.createRadialGradient(20, 64, 4, 20, 64, 240);
+  grad.addColorStop(0, "rgba(255,246,220,0.95)");
+  grad.addColorStop(0.5, "rgba(255,240,200,0.35)");
+  grad.addColorStop(1, "rgba(255,240,200,0)");
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(0, 48);
+  g.lineTo(256, 0);
+  g.lineTo(256, 128);
+  g.lineTo(0, 80);
+  g.closePath();
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Shared by every car so one opacity change fades all headlight beams at dusk. */
+export const beamMaterial = new THREE.MeshBasicMaterial({
+  map: beamTexture(),
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+const beamGeo = new THREE.PlaneGeometry(12, 6);
+beamGeo.rotateX(-Math.PI / 2);
+
 export function syncCarVisual(v: CarVisual, c: CarState, braking: boolean, groundY: number, dt: number): void {
   v.lift += (groundY - v.lift) * Math.min(1, dt * 12);
   v.group.position.set(c.x, v.lift, c.z);
@@ -144,8 +183,10 @@ export function syncCarVisual(v: CarVisual, c: CarState, braking: boolean, groun
   for (const w of v.wheels) w.rotation.z = -c.wheelSpin;
   for (const f of v.frontWheels) f.rotation.y = -c.steer;
   const lightsOn = !c.wrecked;
-  v.brake.emissiveIntensity = lightsOn ? (braking ? 1.4 : 0.15) : 0;
-  v.head.emissiveIntensity = lightsOn ? 0.4 : 0;
+  const night = beamMaterial.opacity;
+  v.brake.emissiveIntensity = lightsOn ? (braking ? 1.4 : 0.15 + night * 0.9) : 0;
+  v.head.emissiveIntensity = lightsOn ? 0.4 + night * 2.6 : 0;
+  v.beam.visible = lightsOn && night > 0.02;
   // Paint scorches toward charcoal as health drops; wrecks are fully burnt.
   const dmg = c.wrecked ? 1 : Math.min(1, (100 - c.health) / 100) * 0.55 + (c.burning ? 0.3 : 0);
   v.body.color.copy(v.baseColor).lerp(CHAR, dmg);

@@ -101,6 +101,12 @@ describe("save data", () => {
     expect(repaired!.money).toBe(0);
     expect(repaired!.garage).toEqual([{ kind: "van", color: 1 }]);
     expect(repaired!.missionsDone).toEqual(["x"]);
+    // Older saves without radio or clock get defaults; junk values are rejected.
+    expect(repaired!.radio).toBe(0);
+    expect(repaired!.clock).toBe(17);
+    const bad = parseSave(JSON.stringify({ version: 1, radio: 9, clock: 99 }));
+    expect(bad!.radio).toBe(0);
+    expect(bad!.clock).toBe(17);
   });
 
   it("garage keeps the newest cars", () => {
