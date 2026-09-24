@@ -1,3 +1,5 @@
+import { RAID_EVERY, freshHoldings, type Holdings } from "./business";
+
 export const SAVE_KEY = "priliv.save";
 export const SAVE_VERSION = 1;
 export const GARAGE_SLOTS = 3;
@@ -24,6 +26,8 @@ export interface SaveData {
   /** Graphics preset; "auto" picks low on touch devices. */
   quality: "auto" | "high" | "low";
   stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number; racesWon: number };
+  /** Businesses bought, their tills and any shakedown under way. */
+  business: Holdings;
 }
 
 export interface KeyValueStore {
@@ -45,7 +49,25 @@ export function freshSave(): SaveData {
     clock: 17,
     quality: "auto",
     stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0, racesWon: 0 },
+    business: freshHoldings(),
   };
+}
+
+function parseHoldings(raw: unknown): Holdings {
+  const h = freshHoldings();
+  if (!raw || typeof raw !== "object") return h;
+  const data = raw as { list?: Record<string, unknown>; nextRaid?: unknown };
+  if (typeof data.nextRaid === "number" && data.nextRaid > 0 && data.nextRaid <= RAID_EVERY) h.nextRaid = data.nextRaid;
+  for (const [id, v] of Object.entries(data.list ?? {})) {
+    if (!v || typeof v !== "object") continue;
+    const b = v as { owned?: unknown; stored?: unknown; raid?: unknown };
+    h.list[id] = {
+      owned: b.owned === true,
+      stored: typeof b.stored === "number" && b.stored > 0 ? b.stored : 0,
+      raid: typeof b.raid === "number" && b.raid > 0 ? b.raid : 0,
+    };
+  }
+  return h;
 }
 
 function defaultStore(): KeyValueStore | null {
@@ -95,6 +117,7 @@ export function parseSave(raw: string | null): SaveData | null {
       carsDestroyed: num(data.stats?.carsDestroyed, 0),
       racesWon: num(data.stats?.racesWon, 0),
     },
+    business: parseHoldings(data.business),
   };
 }
 
