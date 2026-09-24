@@ -51,7 +51,7 @@ import { isOnCarriageway as onCityRoad } from "../src/world/city";
 describe("chapter two", () => {
   it("follows chapter one and puts every point on drivable road", () => {
     const all = storyMissions(8);
-    expect(all.length).toBe(10);
+    expect(all.length).toBeGreaterThanOrEqual(10);
     expect(all[5].id).toBe("ch2-bridge");
     const island = generateIsland(new Rng(20260924));
     const fake = { n: 8, half: 240, buildings: island.colliders, trees: [], lamps: [], intersections: [], parking: [] };

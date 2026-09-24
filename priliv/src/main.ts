@@ -974,6 +974,9 @@ const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
 const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4);
 const depotMarker = new ZoneMarker(scene, 0xe1b12c, "Д", 5);
 const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6);
+const holdMarker = new ZoneMarker(scene, 0xff6b81, "⚑", 16);
+/** One marker per cache in a collect step. */
+const cacheMarkers = Array.from({ length: 6 }, () => new ZoneMarker(scene, 0x55efc4, "◆", 4));
 const beam = new BeamMarker(scene, 0xff9f43, 9);
 const beamNext = new BeamMarker(scene, 0xff9f43, 9);
 const targetArrow = new TargetArrow(scene);
@@ -1001,6 +1004,10 @@ function addMoney(amount: number): void {
 
 function startMission(m: Mission): void {
   for (const [key, spec] of Object.entries(m.spawns ?? {})) {
+    // A wreck from a failed attempt may still sit on the spawn point.
+    for (const w of vehicles) {
+      if (w.state.wrecked && w !== player.vehicle && Math.hypot(w.state.x - spec.x, w.state.z - spec.z) < 8) recycleAsTraffic(w);
+    }
     const v = addVehicle(makeCar(spec.x, spec.z, spec.heading), spec.kind, spec.color, null);
     if (spec.drives) {
       v.ai = trafficFor(v);
@@ -1009,7 +1016,7 @@ function startMission(m: Mission): void {
     v.missionKey = key;
     missionCars.set(key, v);
   }
-  if (m.id === "ch2-bridge") setTimeout(() => showBanner("Глава 2: Остров"), 200);
+  if (m.chapterTitle) setTimeout(() => showBanner(m.chapterTitle!), 200);
   $("#brief-title").textContent = m.title;
   $("#brief-text").textContent = m.brief;
   briefTimer = 7;
@@ -1022,6 +1029,8 @@ function endMission(): void {
   missionCars.clear();
   objectiveText = "";
   goalMarker.hide();
+  holdMarker.hide();
+  for (const c of cacheMarkers) c.hide();
   beam.hide();
   beamNext.hide();
   targetArrow.hide();
@@ -1042,6 +1051,10 @@ function handleMissionEvents(events: MissionEvent[]): void {
       case "checkpoint":
         audio.alert();
         showBanner(`Точка ${e.index} из ${e.total}`);
+        break;
+      case "pickup":
+        audio.alert();
+        showBanner(`Тайник ${e.count} из ${e.total}`);
         break;
       case "heat":
         wanted.atLeast(e.stars);
@@ -1081,11 +1094,19 @@ function handleMissionEvents(events: MissionEvent[]): void {
         if (!nextStory() && e.mission.id !== RACE.id) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
         break;
       }
-      case "fail":
+      case "fail": {
+        // A rigged car goes up with the mission.
+        const rigged = e.explode ? missionCars.get(e.explode) : undefined;
+        if (rigged && !rigged.state.wrecked) {
+          rigged.state.health = 0;
+          rigged.state.burning = true;
+          rigged.state.fire = 0.05;
+        }
         endMission();
         if (taxi) endTaxiShift(e.reason);
         else showBanner(`Провал: ${e.reason}`);
         break;
+      }
       default:
         break;
     }
@@ -1112,7 +1133,10 @@ function updateMissions(dt: number): void {
       positions[key] = { x: mv.state.x, z: mv.state.z };
     }
     handleMissionEvents(
-      runner.update({ x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, speed: v ? speedOf(v.state) : player.speed, destroyed }, dt),
+      runner.update(
+        { x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, speed: v ? speedOf(v.state) : player.speed, destroyed, targets: positions },
+        dt,
+      ),
     );
   } else {
     const story = nextStory();
@@ -1311,22 +1335,30 @@ function syncMissionVisuals(dt: number): void {
   if (!runner.active) depotMarker.show(PLACES.depot.x, PLACES.depot.z);
   else depotMarker.hide();
   goalMarker.hide();
+  holdMarker.hide();
   beam.hide();
   beamNext.hide();
   targetArrow.hide();
   const step = runner.currentStep;
   if (step?.kind === "goto") goalMarker.show(step.at.x, step.at.z);
+  if (step?.kind === "hold") holdMarker.show(step.at.x, step.at.z);
+  cacheMarkers.forEach((c, i) => {
+    const p = step?.kind === "collect" && !runner.collected[i] ? step.points[i] : undefined;
+    if (p) c.show(p.x, p.z);
+    else c.hide();
+  });
   if (step?.kind === "race") {
     const p = step.points[runner.checkpoint];
     const q = step.points[runner.checkpoint + 1];
     if (p) beam.show(p.x, p.z, true);
     if (q) beamNext.show(q.x, q.z, false);
   }
-  if (step && (step.kind === "enter" || step.kind === "destroy")) {
+  if (step && (step.kind === "enter" || step.kind === "destroy" || step.kind === "tail")) {
     const mv = missionCars.get(step.target);
-    if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, step.kind === "destroy" ? 0xff4d6d : 0x7bed9f, dt);
+    const color = step.kind === "destroy" ? 0xff4d6d : step.kind === "tail" ? 0x74b9ff : 0x7bed9f;
+    if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, color, dt);
   }
-  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker, shopMarker, depotMarker]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- simulation
@@ -1798,10 +1830,19 @@ function updateHud(): void {
   const left = runner.timeLeft;
   const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
   const jobTitle = taxi && runner.mission?.id === "taxi" ? `Такси · заказ ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
-  objectiveEl.innerHTML = runner.active ? `<b>${jobTitle}</b> ${objectiveText}${timer ? ` <span class="${left! < 20 ? "hot" : ""}">${timer}</span>` : ""}` : "";
+  const g = runner.gauge();
+  const gaugeHtml = g
+    ? `<div class="gauge"><i style="width:${Math.round(Math.min(1, g.value) * 100)}%"></i><em>${g.warn || g.label}</em></div>`
+    : "";
+  objectiveEl.innerHTML = runner.active
+    ? `<b>${jobTitle}</b> ${objectiveText}${timer ? ` <span class="${left! < 20 ? "hot" : ""}">${timer}</span>` : ""}${gaugeHtml}`
+    : "";
+  objectiveEl.classList.toggle("warn", !!g?.warn);
+  // The gauge makes the objective box taller; keep the goal arrow below it.
+  arrowEl.style.top = g ? `${Math.round(objectiveEl.getBoundingClientRect().bottom + 4)}px` : "";
   const targets: Record<string, { x: number; z: number }> = {};
   for (const [key, mv] of missionCars) targets[key] = { x: mv.state.x, z: mv.state.z };
-  const goal = runner.active ? runner.objective(targets) : null;
+  const goal = runner.active ? runner.objective(targets, player) : null;
   if (goal) {
     const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
     const rel = Math.atan2(goal.z - player.z, goal.x - player.x) - camYaw;
@@ -1836,6 +1877,8 @@ function updateHud(): void {
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
   }
+  const cur = runner.currentStep;
+  if (cur?.kind === "collect") cur.points.forEach((p, i) => !runner.collected[i] && icons.push({ ...p, color: "#55efc4", label: "◆" }));
   if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", clamp: true });
   minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots, icons);
 }

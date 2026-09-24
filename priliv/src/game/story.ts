@@ -22,6 +22,8 @@ export interface Places {
   race: Point;
   shop: Point;
   depot: Point;
+  /** Nika's corner, where chapter three is handed out. */
+  office: Point;
   /** Where cars bought at the shop are delivered. */
   shopLot: { x: number; z: number; heading: number };
   garageSlots: Array<{ x: number; z: number; heading: number }>;
@@ -37,6 +39,7 @@ export function places(n: number): Places {
     race: road(n, n / 2 + 2, n / 2 + 2, mid, 0),
     shop: road(n, n / 2 + 1, n / 2, 0, mid),
     depot: road(n, 3, n, mid, -2),
+    office: road(n, 1, 2, mid, 0),
     shopLot: { ...road(n, n / 2 + 1, n / 2, 3.6, mid + 12), heading: Math.PI / 2 },
     garageSlots: [-16, -9, 9].map((dx) => ({ x: garage.x + dx, z: garage.z + 3.6, heading: 0 })),
   };
@@ -72,9 +75,98 @@ export function raceMission(n: number): Mission {
   };
 }
 
-/** Both chapters in play order. */
+/** All chapters in play order. */
 export function storyMissions(n: number): Mission[] {
-  return [...chapterOne(n), ...chapterTwo(n)];
+  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n)];
+}
+
+/** 50 km/h: the rigged car must not drop below it. */
+export const BOMB_SPEED = 50 / 3.6;
+
+export function chapterThree(n: number): Mission[] {
+  const I = ISLAND_SPOTS;
+  const P = places(n);
+  const office = P.office;
+  const list: Mission[] = [
+    {
+      id: "ch3-tail",
+      chapter: 3,
+      chapterTitle: "Глава 3: Большая вода",
+      contact: office,
+      title: "Хвост",
+      brief: "Глава 3. Журналистка Ника копает под мэра Грачёва. Его помощник возит бумаги на серой машине. Держитесь за ним минуту: не ближе 12 метров, иначе он вас заметит.",
+      reward: 1800,
+      time: 180,
+      spawns: { aide: { kind: "sedan", color: 0x8395a7, ...road(n, 2, 2, 0, 20), heading: Math.PI / 2, drives: true } },
+      steps: [{ kind: "tail", target: "aide", near: 12, far: 55, seconds: 60, text: "Следите за серой машиной, не приближаясь" }],
+    },
+    {
+      id: "ch3-papers",
+      chapter: 3,
+      contact: office,
+      title: "Компромат",
+      brief: "Помощник разложил копии документов по тайникам: четыре в углах города и один в порту. Соберите все и привезите Нике.",
+      reward: 2600,
+      time: 300,
+      steps: [
+        {
+          kind: "collect",
+          radius: 6,
+          text: "Соберите папки из тайников",
+          points: [road(n, 1, 1), road(n, n - 1, 1), road(n, n - 1, n - 1), road(n, 1, n - 1), I.docks],
+        },
+        { kind: "goto", at: office, radius: 7, stop: true, text: "Привезите папки Нике" },
+      ],
+    },
+    {
+      id: "ch3-bomb",
+      chapter: 3,
+      contact: office,
+      title: "Горячая скорость",
+      brief: "Грачёв узнал про Нику. В её машине бомба, которая сработает, если сбросить скорость ниже 50 км/ч. Держите скорость минуту, пока сапёр не отключит таймер по радио.",
+      reward: 4000,
+      time: 240,
+      spawns: { rigged: { kind: "sedan", color: 0xe67e22, ...road(n, 1, 2, 0, 14), heading: Math.PI / 2, drives: false } },
+      protect: "rigged",
+      steps: [
+        { kind: "enter", target: "rigged", text: "Сядьте в оранжевую машину Ники" },
+        { kind: "speed", target: "rigged", min: BOMB_SPEED, seconds: 60, text: "Не сбрасывайте скорость ниже 50 км/ч" },
+        { kind: "goto", at: P.paint, radius: 7, vehicle: "rigged", stop: true, text: "Таймер отключён. Отгоните машину к покраске" },
+      ],
+    },
+    {
+      id: "ch3-siege",
+      chapter: 3,
+      contact: office,
+      title: "Осада",
+      brief: "Люди мэра хотят отобрать склад Льва на острове. Держитесь у склада 40 секунд, пока Лев вывозит груз. Полиция куплена и приедет за вами.",
+      reward: 3500,
+      time: 360,
+      heatAfter: { 0: 3 },
+      steps: [
+        { kind: "goto", at: I.lot, radius: 10, vehicle: "any", text: "Доберитесь до склада Льва на острове" },
+        { kind: "hold", at: I.lot, radius: 16, seconds: 40, text: "Удерживайте склад" },
+        { kind: "evade", text: "Оторвитесь от полиции" },
+      ],
+    },
+    {
+      id: "ch3-finale",
+      chapter: 3,
+      contact: office,
+      title: "Большая вода",
+      brief: "Грачёв бежит из города на чёрном фургоне. Проследите, куда он едет, а потом остановите фургон. После этого исчезните.",
+      reward: 10000,
+      time: 360,
+      spawns: { mayor: { kind: "van", color: 0x0b0c10, ...road(n, n - 2, 2, 0, 20), heading: Math.PI / 2, drives: true } },
+      heatAfter: { 0: 2 },
+      steps: [
+        { kind: "tail", target: "mayor", near: 10, far: 60, seconds: 40, text: "Следите за чёрным фургоном мэра" },
+        { kind: "destroy", target: "mayor", text: "Уничтожьте фургон мэра" },
+        { kind: "evade", text: "Заляжьте на дно" },
+      ],
+    },
+  ];
+  return list;
 }
 
 export function chapterTwo(n: number): Mission[] {
@@ -83,6 +175,7 @@ export function chapterTwo(n: number): Mission[] {
     {
       id: "ch2-bridge",
       chapter: 2,
+      chapterTitle: "Глава 2: Остров",
       title: "Мост",
       brief: "Глава 2. У Миры есть старый друг на острове, Лев, начальник порта. Переезжайте мост и найдите его у главной улицы.",
       reward: 800,
