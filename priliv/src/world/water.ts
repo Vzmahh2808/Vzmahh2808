@@ -1,5 +1,6 @@
 import { ISLAND, landAt } from "./island";
 import type { Point } from "../game/missions";
+import { chaseBoat, type BoatInput, type BoatState } from "../entities/boatPhysics";
 
 /** Open water a boat may float on: not land, not a pier, not the bridge, inside the world. */
 export function isBoatWater(x: number, z: number, cityLimit: number): boolean {
@@ -122,4 +123,51 @@ export function routeOnWater(from: Point, to: Point, isWater: (x: number, z: num
     }
   }
   return bestFirst >= 0 ? nodes[bestFirst] : to;
+}
+
+/**
+ * A fugitive's course: up the north channel, round the lighthouse, along the
+ * south side to the marina and back again (the bridge blocks a full loop).
+ */
+export const SMUGGLER_ROUTE: Point[] = [
+  { x: 330, z: 150 },
+  { x: 460, z: 190 },
+  { x: 620, z: 180 },
+  { x: 686, z: 90 },
+  { x: 688, z: 0 },
+  { x: 686, z: -90 },
+  { x: 620, z: -185 },
+  { x: 460, z: -195 },
+  { x: 334, z: -210 },
+  { x: 330, z: -90 },
+  { x: 334, z: -210 },
+  { x: 460, z: -195 },
+  { x: 620, z: -185 },
+  { x: 686, z: -90 },
+  { x: 688, z: 0 },
+  { x: 686, z: 90 },
+  { x: 620, z: 180 },
+  { x: 460, z: 190 },
+];
+
+export interface RouteFollower {
+  index: number;
+  aim: Point;
+  aimTimer: number;
+}
+
+/** Sail a route in a loop: steer for each waypoint in turn, around land when needed. */
+export function followRoute(s: BoatState, route: Point[], f: RouteFollower, throttle: number, isWater: (x: number, z: number) => boolean, dt: number): BoatInput {
+  const wp = route[f.index % route.length];
+  if (Math.hypot(wp.x - s.x, wp.z - s.z) < 18) {
+    f.index = (f.index + 1) % route.length;
+    f.aimTimer = 0;
+  }
+  f.aimTimer -= dt;
+  if (f.aimTimer <= 0) {
+    f.aim = routeOnWater(s, route[f.index], isWater);
+    f.aimTimer = 0.5;
+  }
+  const input = chaseBoat(s, { x: f.aim.x, z: f.aim.z, vx: 0, vz: 0 }, isWater);
+  return { throttle: Math.min(input.throttle, throttle), steer: input.steer };
 }

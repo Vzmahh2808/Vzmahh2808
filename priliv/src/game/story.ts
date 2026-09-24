@@ -1,7 +1,7 @@
 import { PITCH, roadCoord } from "../world/city";
 import type { Mission, Point } from "./missions";
 import { LIGHTHOUSE } from "../world/island";
-import { REGATTA, REGATTA_TIME } from "../world/water";
+import { REGATTA, REGATTA_TIME, SMUGGLER_ROUTE } from "../world/water";
 
 /** Fixed spots on the port island (roads there are not on the city grid). */
 export const ISLAND_SPOTS = {
@@ -89,7 +89,105 @@ export function raceMission(n: number): Mission {
 
 /** All chapters in play order. */
 export function storyMissions(n: number): Mission[] {
-  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n)];
+  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour()];
+}
+
+/** Captain Marta stands on the city marina pier. */
+export const MARTA = { x: 281, z: -154 };
+
+/** Water points for chapter four, all on open water. */
+export const SEA = {
+  lighthouse: { x: 690, z: 0 },
+  /** Off the end of the marina pier, clear of the regatta start. */
+  pierTip: { x: 306, z: -154 },
+  southBuoy: { x: 560, z: -205 },
+  crates: [
+    { x: 380, z: -222 },
+    { x: 600, z: -200 },
+    { x: 690, z: -60 },
+    { x: 650, z: 190 },
+    { x: 420, z: 200 },
+  ],
+};
+
+export function chapterFour(): Mission[] {
+  const list: Mission[] = [
+    {
+      id: "ch4-cargo",
+      chapter: 4,
+      chapterTitle: "Глава 4: Открытая вода",
+      contact: MARTA,
+      title: "Ночной груз",
+      brief: "Глава 4. Капитан Марта возит грузы мимо таможни. Возьмите тёмный скоростной катер у пристани и доставьте его к маяку. Береговая охрана уже в курсе.",
+      reward: 3000,
+      time: 240,
+      boats: { cargo: { kind: "speedboat", color: 0x2d3436, x: 300, z: -154, heading: 0 } },
+      protect: "cargo",
+      heatAfter: { 0: 2 },
+      steps: [
+        { kind: "enter", target: "cargo", text: "Сядьте в тёмный катер у пристани" },
+        { kind: "goto", at: SEA.lighthouse, radius: 12, vehicle: "cargo", text: "Доставьте груз к маяку" },
+        { kind: "evade", text: "Уйдите от береговой охраны" },
+      ],
+    },
+    {
+      id: "ch4-fugitive",
+      chapter: 4,
+      contact: MARTA,
+      title: "Беглец",
+      brief: "Человек мэра удирает на красном катере вокруг острова. Возьмите катер у пристани, догоните его и тараньте, пока он не пойдёт ко дну.",
+      reward: 3500,
+      time: 300,
+      boats: { runner: { kind: "motorboat", color: 0xc0392b, ...SMUGGLER_ROUTE[8], heading: 0, route: SMUGGLER_ROUTE, health: 45 } },
+      steps: [{ kind: "destroy", target: "runner", text: "Протараньте красный катер, пока он не затонет" }],
+    },
+    {
+      id: "ch4-crates",
+      chapter: 4,
+      contact: MARTA,
+      title: "Сброшенный груз",
+      brief: "Ночью с баржи сбросили ящики, они качаются на волнах вокруг острова. Соберите все пять раньше береговой охраны и вернитесь к пристани.",
+      reward: 3200,
+      time: 300,
+      steps: [
+        { kind: "collect", points: SEA.crates, radius: 8, text: "Соберите ящики на воде" },
+        { kind: "goto", at: SEA.pierTip, radius: 10, vehicle: "boat", stop: true, text: "Вернитесь к городской пристани" },
+      ],
+    },
+    {
+      id: "ch4-buoy",
+      chapter: 4,
+      contact: MARTA,
+      title: "Буй",
+      brief: "У южного буя ночью пройдёт обмен. Держитесь рядом с буем 35 секунд, пока катер охраны пытается вас оттеснить.",
+      reward: 4000,
+      time: 360,
+      heatAfter: { 0: 3 },
+      steps: [
+        { kind: "goto", at: SEA.southBuoy, radius: 14, vehicle: "boat", text: "Доплывите до южного буя" },
+        { kind: "hold", at: SEA.southBuoy, radius: 22, seconds: 35, text: "Держитесь у буя" },
+        { kind: "evade", text: "Уйдите от береговой охраны" },
+      ],
+    },
+    {
+      id: "ch4-finale",
+      chapter: 4,
+      contact: MARTA,
+      title: "Шторм",
+      brief: "В шторм хозяин мэра уходит на чёрном катере с деньгами города. Проследите, куда он идёт, потом отправьте его на дно и исчезните.",
+      reward: 12000,
+      time: 420,
+      weather: "storm",
+      boats: { boss: { kind: "motorboat", color: 0x111214, ...SMUGGLER_ROUTE[0], heading: 0, route: SMUGGLER_ROUTE, health: 70 } },
+      heatAfter: { 1: 2 },
+      steps: [
+        { kind: "tail", target: "boss", near: 15, far: 90, seconds: 40, text: "Следуйте за чёрным катером на расстоянии" },
+        { kind: "destroy", target: "boss", text: "Отправьте чёрный катер на дно" },
+        { kind: "evade", text: "Заляжьте на дно" },
+      ],
+    },
+  ];
+  return list;
 }
 
 /** 50 km/h: the rigged car must not drop below it. */

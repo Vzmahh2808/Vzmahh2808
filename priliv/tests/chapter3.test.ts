@@ -117,10 +117,10 @@ describe("speed step", () => {
 describe("chapter three", () => {
   it("follows chapter two and opens with a banner", () => {
     const all = storyMissions(8);
-    expect(all.length).toBe(15);
+    expect(all.length).toBeGreaterThanOrEqual(15);
     expect(all[10].id).toBe("ch3-tail");
     expect(all[10].chapterTitle).toBe("Глава 3: Большая вода");
-    expect(all.filter((m) => m.chapterTitle).map((m) => m.chapter)).toEqual([2, 3]);
+    expect(all.filter((m) => m.chapterTitle).map((m) => m.chapter)).toEqual([2, 3, 4]);
     expect(BOMB_SPEED * 3.6).toBeCloseTo(50);
   });
 

@@ -51,8 +51,9 @@ export class ZoneMarker {
     scene.add(this.group);
   }
 
-  show(x: number, z: number): void {
-    this.group.position.set(x, 0, z);
+  /** `y` lifts the marker onto raised ground such as a pier deck. */
+  show(x: number, z: number, y = 0): void {
+    this.group.position.set(x, y, z);
     this.group.visible = true;
   }
 
