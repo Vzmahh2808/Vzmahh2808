@@ -115,6 +115,23 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   beam.renderOrder = 1;
   g.add(beam);
   const visual: CarVisual = { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake, head, body, beam };
+  if (kind === "taxi") {
+    const roofY = 0.45 + chassisH + cabH;
+    const sign = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.26, W * 0.5),
+      new THREE.MeshStandardMaterial({ color: 0xfff4c2, emissive: 0xffd24a, emissiveIntensity: 0.9 }),
+    );
+    sign.position.set(cabX, roofY + 0.14, 0);
+    shell.add(sign);
+    const checkerMat = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6 });
+    for (const sgn of [-1, 1]) {
+      for (let i = 0; i < 6; i++) {
+        const sq = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.14, 0.02), checkerMat);
+        sq.position.set(-L * 0.3 + i * 0.56, 0.45 + chassisH * (i % 2 ? 0.45 : 0.72), sgn * (W / 2 + 0.01));
+        shell.add(sq);
+      }
+    }
+  }
   if (kind === "police") {
     const roofY = 0.45 + chassisH + cabH;
     const stripeMat = new THREE.MeshStandardMaterial({ color: 0x1b3a8a, roughness: 0.5 });

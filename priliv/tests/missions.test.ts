@@ -93,13 +93,14 @@ describe("save data", () => {
     const s = freshSave();
     s.money = 1234;
     s.missionsDone.push("first-run");
+    s.garage.push({ kind: "sedan", color: 3, mods: { engine: true, tires: false, armor: false } });
     writeSave(s, store);
     expect(loadSave(store)).toEqual(s);
     expect(parseSave("{not json")).toBeNull();
     expect(parseSave(JSON.stringify({ version: 999 }))).toBeNull();
     const repaired = parseSave(JSON.stringify({ version: 1, money: -50, garage: [{ kind: "van", color: 1 }, "bad"], missionsDone: [1, "x"] }));
     expect(repaired!.money).toBe(0);
-    expect(repaired!.garage).toEqual([{ kind: "van", color: 1 }]);
+    expect(repaired!.garage).toEqual([{ kind: "van", color: 1, mods: { engine: false, tires: false, armor: false } }]);
     expect(repaired!.missionsDone).toEqual(["x"]);
     // Older saves without radio or clock get defaults; junk values are rejected.
     expect(repaired!.radio).toBe(0);

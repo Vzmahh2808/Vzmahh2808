@@ -5,6 +5,7 @@ export const GARAGE_SLOTS = 3;
 export interface GarageCar {
   kind: string;
   color: number;
+  mods?: { engine: boolean; tires: boolean; armor: boolean };
 }
 
 export interface SaveData {
@@ -71,6 +72,11 @@ export function parseSave(raw: string | null): SaveData | null {
     garage: Array.isArray(data.garage)
       ? data.garage
           .filter((c): c is GarageCar => !!c && typeof c.kind === "string" && typeof c.color === "number")
+          .map((c) => ({
+            kind: c.kind,
+            color: c.color,
+            mods: { engine: c.mods?.engine === true, tires: c.mods?.tires === true, armor: c.mods?.armor === true },
+          }))
           .slice(0, GARAGE_SLOTS)
       : [],
     bestRace: typeof data.bestRace === "number" && data.bestRace > 0 ? data.bestRace : null,

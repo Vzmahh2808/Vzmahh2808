@@ -16,7 +16,7 @@ export interface SpawnSpec {
 }
 
 export type Step =
-  | { kind: "goto"; at: Point; radius: number; vehicle?: "any" | "none" | string; text: string }
+  | { kind: "goto"; at: Point; radius: number; vehicle?: "any" | "none" | string; stop?: boolean; text: string }
   | { kind: "enter"; target: string; text: string }
   | { kind: "race"; points: Point[]; radius: number; text: string }
   | { kind: "stars"; min: number; text: string }
@@ -44,6 +44,8 @@ export interface MissionContext {
   /** Key of the mission vehicle the player is in, "any" for another car, or null on foot. */
   vehicle: string | null;
   stars: number;
+  /** Player's current speed in m/s (on foot or in a car). */
+  speed?: number;
   /** Mission vehicles that are burning or wrecked. */
   destroyed: Set<string>;
 }
@@ -114,7 +116,8 @@ export class MissionRunner {
         const inside = Math.hypot(ctx.x - s.at.x, ctx.z - s.at.z) < s.radius;
         const v = s.vehicle ?? "any";
         const vehicleOk = v === "none" ? ctx.vehicle === null : v === "any" ? ctx.vehicle !== null : ctx.vehicle === v;
-        done = inside && vehicleOk;
+        const stopped = !s.stop || (ctx.speed ?? 0) < 3;
+        done = inside && vehicleOk && stopped;
         break;
       }
       case "enter":

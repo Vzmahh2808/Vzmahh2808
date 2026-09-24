@@ -129,8 +129,9 @@ export class TouchControls {
   }
 
   /** Show the buttons that matter right now. */
-  setMode(inCar: boolean, canEnter: boolean): void {
+  setMode(inCar: boolean, canEnter: boolean, taxi = false): void {
     if (!this.enabled) return;
+    this.root.classList.toggle("taxi", taxi);
     this.root.classList.toggle("in-car", inCar);
     this.root.classList.toggle("can-enter", canEnter || inCar);
     const enter = this.root.querySelector<HTMLElement>(".enter");
