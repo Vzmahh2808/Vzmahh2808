@@ -2,7 +2,9 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="color-scheme" content="dark" />
     <title>Прилив</title>
     <meta name="description" content="Открытый низкополигональный город в браузере: машины, трафик, погони. Three.js." />
@@ -21,6 +23,20 @@
       <div id="objective" class="hud"></div>
       <div id="goal-arrow" class="hud"><span class="tri">▲</span><span class="dist"></span></div>
       <div id="brief" class="hud"><b id="brief-title"></b><p id="brief-text"></p></div>
+      <div id="touch">
+        <div class="stick-zone"></div>
+        <div class="stick-base"><div class="stick-knob"></div></div>
+        <div class="tbtns">
+          <button class="tbtn big enter" data-key="KeyE">Сесть</button>
+          <button class="tbtn big car" data-key="Space" data-hold="1">Ручник</button>
+          <button class="tbtn foot" data-key="ShiftLeft" data-hold="1">Бег</button>
+          <button class="tbtn car" data-key="KeyH" data-hold="1">Сигнал</button>
+          <button class="tbtn car" data-key="KeyR">Радио</button>
+          <button class="tbtn" data-key="KeyC">Камера</button>
+        </div>
+        <button class="tbtn pausebtn" data-key="Escape" aria-label="Пауза">❚❚</button>
+        <div class="rotate-hint">Поверните телефон горизонтально</div>
+      </div>
       <div id="pause" class="hidden">
         <div class="card">
           <h1>Пауза</h1>
@@ -28,6 +44,7 @@
           <div class="start-buttons">
             <button id="btn-resume">Продолжить</button>
             <button id="btn-sound" class="secondary">Звук</button>
+            <button id="btn-quality" class="secondary">Качество</button>
             <button id="btn-new" class="secondary danger">Новая игра</button>
           </div>
         </div>
@@ -43,7 +60,7 @@
           <h1>Прилив</h1>
           <p>Портовый город и пять заданий от Миры, хозяйки склада. Метка <b>!</b> на карте начинает следующее задание, <b>З</b> — заезд на время, <b>Г</b> — ваш гараж, <b>П</b> — покраска, которая чинит машину и сбивает розыск.</p>
           <p>За угоны, наезды и взрывы вас объявят в розыск. Полиция устроит погоню и выставит блокпосты, а на высоком уровне поднимет вертолёт. Прогресс сохраняется сам.</p>
-          <div class="keys">
+          <div class="keys keyboard-only">
             <kbd>W A S D</kbd><span>Идти / рулить</span>
             <kbd>Shift</kbd><span>Бежать</span>
             <kbd>E</kbd><span>Сесть в машину / выйти</span>
@@ -53,6 +70,10 @@
             <kbd>R</kbd><span>Радио в машине</span>
             <kbd>M</kbd><span>Звук</span>
             <kbd>Esc</kbd><span>Пауза и меню</span>
+          </div>
+          <div class="keys touch-only">
+            <kbd>Джойстик</kbd><span>Слева: ходьба, газ и руль</span>
+            <kbd>Кнопки</kbd><span>Справа: сесть, ручник, сигнал, радио, камера</span>
           </div>
           <div class="start-buttons">
             <button id="btn-continue" hidden>Продолжить</button>

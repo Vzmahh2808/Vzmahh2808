@@ -97,3 +97,51 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 }
 #clock { right: 20px; top: 96px; font-family: var(--mono); font-size: 14px; color: #dfe6f0; text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
 @media (max-width: 700px) { #clock { top: 88px; font-size: 12px; } }
+
+/* ---------------- touch controls ---------------- */
+#touch { display: none; }
+.touch-only { display: none !important; }
+body.touch .touch-only { display: grid !important; }
+body.touch .keyboard-only { display: none !important; }
+body.touch #touch { display: block; position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+body.touch #touch .stick-zone { position: absolute; left: 0; bottom: 0; width: 45%; height: 70%; pointer-events: auto; touch-action: none; }
+body.touch #touch .stick-base { position: absolute; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: rgba(255,255,255,0.08); border: 2px solid rgba(255,255,255,0.25); opacity: 0; transition: opacity 0.15s; pointer-events: none; }
+body.touch #touch .stick-base.on { opacity: 1; }
+body.touch #touch .stick-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; border-radius: 50%; background: rgba(255,211,42,0.8); transform: translate(-50%, -50%); box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
+body.touch #touch .tbtns { position: absolute; right: 14px; bottom: 14px; display: grid; grid-template-columns: repeat(3, auto); gap: 8px; align-items: end; justify-items: end; pointer-events: auto; direction: rtl; }
+body.touch .tbtn { direction: ltr; font: 600 13px var(--font); color: #eef1f6; background: rgba(20,24,38,0.72); border: 1px solid rgba(255,255,255,0.22); border-radius: 14px; padding: 12px 14px; min-width: 64px; touch-action: none; user-select: none; -webkit-user-select: none; backdrop-filter: blur(4px); }
+body.touch .tbtn.big { min-width: 86px; min-height: 64px; font-size: 15px; border-radius: 18px; }
+body.touch .tbtn.enter { background: rgba(255,211,42,0.85); color: #141826; border-color: transparent; }
+body.touch .tbtn.down { transform: scale(0.94); filter: brightness(1.3); }
+body.touch #touch .car { display: none; }
+body.touch #touch.in-car .car { display: block; }
+body.touch #touch.in-car .foot { display: none; }
+body.touch #touch .enter { display: none; }
+body.touch #touch.can-enter .enter { display: block; }
+body.touch #touch.in-car .enter { background: rgba(20,24,38,0.72); color: #eef1f6; border-color: rgba(255,255,255,0.22); }
+body.touch #touch .pausebtn { position: absolute; top: 10px; right: 10px; min-width: 44px; padding: 8px 10px; pointer-events: auto; }
+body.touch #touch .rotate-hint { display: none; }
+@media (orientation: portrait) {
+  body.touch #touch .rotate-hint { display: block; position: absolute; left: 50%; top: 40%; transform: translateX(-50%); background: rgba(10,12,18,0.85); padding: 10px 16px; border-radius: 10px; font-size: 14px; white-space: nowrap; }
+}
+/* Touch layout: HUD moves out of the thumbs' way. */
+body.touch #title { display: none; }
+body.touch #stats { display: none; }
+body.touch #minimap { left: 12px; right: auto; top: 12px; bottom: auto; width: 110px; height: 110px; }
+body.touch #speed { left: 132px; top: 14px; bottom: auto; }
+body.touch #speed .num { font-size: 30px; }
+body.touch #health { left: 132px; top: 64px; bottom: auto; width: 110px; }
+body.touch #carhp { left: 132px; top: 76px; bottom: auto; width: 110px; }
+body.touch #wanted { right: 64px; top: 12px; font-size: 20px; }
+body.touch #money { right: 64px; top: 38px; font-size: 16px; }
+body.touch #clock { right: 64px; top: 60px; font-size: 12px; }
+body.touch #objective { top: 10px; max-width: calc(100vw - 420px); font-size: 12.5px; }
+body.touch #goal-arrow { top: 64px; }
+body.touch #hint { bottom: auto; top: 96px; font-size: 12.5px; }
+body.touch #brief { top: auto; bottom: 110px; left: 50%; transform: translateX(-50%); width: min(420px, 60vw); }
+body.touch #banner { top: 32%; font-size: 20px; }
+@media (max-width: 700px) {
+  body.touch #objective { max-width: calc(100vw - 150px); left: auto; right: 12px; transform: none; top: 130px; }
+  body.touch #goal-arrow { top: 170px; }
+}
+#hint:empty { display: none; }

@@ -18,6 +18,8 @@ export interface SaveData {
   radio: number;
   /** In-game hour, restored on load. */
   clock: number;
+  /** Graphics preset; "auto" picks low on touch devices. */
+  quality: "auto" | "high" | "low";
   stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number };
 }
 
@@ -37,6 +39,7 @@ export function freshSave(): SaveData {
     muted: false,
     radio: 0,
     clock: 17,
+    quality: "auto",
     stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0 },
   };
 }
@@ -74,6 +77,7 @@ export function parseSave(raw: string | null): SaveData | null {
     muted: data.muted === true,
     radio: typeof data.radio === "number" && data.radio >= -1 && data.radio <= 2 ? Math.floor(data.radio) : base.radio,
     clock: typeof data.clock === "number" && data.clock >= 0 && data.clock < 24 ? data.clock : base.clock,
+    quality: data.quality === "high" || data.quality === "low" ? data.quality : "auto",
     stats: {
       missions: num(data.stats?.missions, 0),
       arrests: num(data.stats?.arrests, 0),

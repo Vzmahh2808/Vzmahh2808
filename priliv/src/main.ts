@@ -23,6 +23,7 @@ import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
 import { WEATHER_NAMES, Weather, type WeatherKind } from "./world/weather";
 import { Radio } from "./audio/radio";
+import { TouchControls, isTouchDevice } from "./ui/touch";
 import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
 
@@ -655,11 +656,34 @@ try {
 const radio = new Radio(() => audio.node());
 radio.station = save.radio;
 
+const touch = new TouchControls(input, location.search.includes("touch"));
+/** Keyboard or touch wording for on-screen hints. */
+const k = (keys: string, tap: string) => (touch.enabled ? tap : keys);
+
+let lowQuality = false;
+function applyQuality(): void {
+  const pref = save.quality;
+  lowQuality = pref === "low" || (pref === "auto" && isTouchDevice());
+  renderer.setPixelRatio(lowQuality ? 1 : Math.min(window.devicePixelRatio, 2));
+  const size = lowQuality ? 1024 : 2048;
+  if (sun.shadow.mapSize.x !== size) {
+    sun.shadow.mapSize.set(size, size);
+    sun.shadow.map?.dispose();
+    sun.shadow.map = null;
+  }
+  resize();
+  const btn = document.querySelector("#btn-quality");
+  if (btn) btn.textContent = `Качество: ${pref === "auto" ? (lowQuality ? "авто, низкое" : "авто, высокое") : pref === "low" ? "низкое" : "высокое"}`;
+}
+applyQuality();
+
 const pauseEl = $<HTMLDivElement>("#pause");
 let confirmNew = false;
 function setPaused(on: boolean): void {
   if (!started) return;
   paused = on;
+  // Drop any taps that happened while the menu was open so they do not replay.
+  input.endFrame();
   confirmNew = false;
   pauseEl.classList.toggle("hidden", !on);
   if (on) {
@@ -680,6 +704,11 @@ function setPaused(on: boolean): void {
   }
 }
 $("#btn-resume").addEventListener("click", () => setPaused(false));
+$("#btn-quality").addEventListener("click", () => {
+  save.quality = save.quality === "auto" ? (lowQuality ? "high" : "low") : save.quality === "low" ? "high" : "low";
+  persist();
+  applyQuality();
+});
 $("#btn-sound").addEventListener("click", () => {
   audio.muted = !audio.muted;
   save.muted = audio.muted;
@@ -1120,6 +1149,7 @@ function update(dt: number, now: number): void {
   audio.rain(weather.rain);
   radio.update(!!player.vehicle && player.dead === 0 && !audio.muted);
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
+  if (input.justPressed("Escape") && touch.enabled) setPaused(true);
   if (input.justPressed("KeyR")) {
     const name = radio.next();
     save.radio = radio.station;
@@ -1140,8 +1170,8 @@ function update(dt: number, now: number): void {
   } else if (player.vehicle) {
     const v = player.vehicle;
     v.blame = simTime;
-    v.input.throttle = input.axis(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"]);
-    v.input.steer = input.axis(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"]);
+    v.input.throttle = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
+    v.input.steer = input.mixed(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"], input.analog.x);
     v.input.handbrake = input.isDown("Space");
     v.input.brake = false;
     if (input.isDown("KeyH")) threats.push({ x: v.state.x, z: v.state.z, radius: 14 });
@@ -1151,9 +1181,10 @@ function update(dt: number, now: number): void {
     }
     if (input.justPressed("KeyE", "KeyF") && speedOf(v.state) < 6) exitVehicle();
   } else {
-    const run = input.isDown("ShiftLeft", "ShiftRight");
-    const fwd = input.axis(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"]);
-    const turn = input.axis(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"]);
+    const stickMag = Math.hypot(input.analog.x, input.analog.y);
+    const run = input.isDown("ShiftLeft", "ShiftRight") || stickMag > 0.92;
+    const fwd = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
+    const turn = input.mixed(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"], input.analog.x);
     const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
     let mx = 0;
     let mz = 0;
@@ -1166,7 +1197,9 @@ function update(dt: number, now: number): void {
       while (d < -Math.PI) d += Math.PI * 2;
       player.heading += d * Math.min(1, dt * 12);
     }
-    const targetSpeed = fwd || turn ? (run ? 7.5 : 3.2) : 0;
+    // Analog sticks walk slower when pushed only part-way.
+    const effort = Math.min(1, Math.max(Math.abs(fwd), Math.abs(turn), stickMag));
+    const targetSpeed = fwd || turn ? (run ? 7.5 : 3.2 * Math.max(0.4, effort)) : 0;
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 10);
     player.x += mx * player.speed * dt;
     player.z += mz * player.speed * dt;
@@ -1517,10 +1550,11 @@ function updateHud(): void {
   carHpWrap.style.display = v ? "block" : "none";
   if (v) carHpEl.style.width = `${v.state.health}%`;
   if (player.dead > 0) hintEl.textContent = "";
-  else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? "Машина горит! E — выйти" : "Машина горит! Тормозите и выходите";
-  else if (v) hintEl.textContent = speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал" : "Пробел — ручник · C — камера";
+  else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? k("Машина горит! E — выйти", "Машина горит! Жмите «Сесть», чтобы выйти") : "Машина горит! Тормозите и выходите";
+  else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал · R — радио" : "Пробел — ручник · C — камера";
   else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
-  else hintEl.textContent = nearestEnterable() ? "E — сесть в машину" : "WASD — идти · Shift — бежать";
+  else hintEl.textContent = nearestEnterable() ? k("E — сесть в машину", "Жмите «Сесть»") : touch.enabled ? "" : "WASD — идти · Shift — бежать";
+  touch.setMode(!!v, !!nearestEnterable());
   hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
   const stars = starsEl.children;
   for (let i = 0; i < stars.length; i++) stars[i].classList.toggle("on", i < wanted.level);
