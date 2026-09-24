@@ -1,7 +1,7 @@
 import type { Rng } from "../core/rng";
 import { nearestNode, type WalkGraph } from "../world/sidewalks";
 
-export type PedState = "walk" | "flee" | "down" | "gone";
+export type PedState = "walk" | "flee" | "down" | "gone" | "wait";
 
 export interface Ped {
   id: number;
@@ -90,7 +90,8 @@ export function knockPed(p: Ped, vx: number, vz: number): void {
 }
 
 export function scare(p: Ped, from: { x: number; z: number }, seconds = 4): void {
-  if (p.state === "down" || p.state === "gone") return;
+  // Waiting fares hold their ground; only a hit knocks them over.
+  if (p.state === "down" || p.state === "gone" || p.state === "wait") return;
   p.state = "flee";
   p.timer = Math.max(p.timer, seconds);
   p.heading = Math.atan2(p.z - from.z, p.x - from.x);
@@ -108,6 +109,11 @@ export function stepPed(
   collide?: (x: number, z: number) => { x: number; z: number } | null,
 ): void {
   if (p.state === "gone") return;
+  if (p.state === "wait") {
+    p.speed = 0;
+    p.fall = Math.max(0, p.fall - dt * 2);
+    return;
+  }
 
   if (p.state === "down") {
     p.vy -= GRAVITY * dt;

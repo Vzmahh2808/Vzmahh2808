@@ -4,7 +4,7 @@ import { Input } from "./core/input";
 import { PITCH, ROAD_WIDTH, clampToCity, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
 import { buildCityMeshes } from "./world/cityMesh";
 import { buildWalkGraph } from "./world/sidewalks";
-import { CAR_SPECS, CIVILIAN_KINDS, collideCar, forwardSpeed, lateralSpeed, makeCar, separateCars, speedOf, stepCar, type CarInput, type CarState } from "./entities/carPhysics";
+import { CAR_SPECS, CIVILIAN_KINDS, NO_MODS, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
 import { beamMaterial, buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
 import { animatePedestrian, buildPedestrian, HAIR, PANTS, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
@@ -19,6 +19,7 @@ import { Helicopter } from "./police/helicopter";
 import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData } from "./game/save";
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
 import { places, raceMission, storyMissions } from "./game/story";
+import { MOD_SHOP, SHOP, buy, makeCourierRun, makeTaxiFare, taxiFare, type TaxiFare } from "./game/jobs";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
 import { WEATHER_NAMES, Weather, type WeatherKind } from "./world/weather";
@@ -96,6 +97,7 @@ interface Vehicle {
   missionKey: string | null;
   /** Already stored in the player's garage. */
   garaged: boolean;
+  mods: CarMods;
 }
 
 const vehicles: Vehicle[] = [];
@@ -117,6 +119,7 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     blame: -1e9,
     missionKey: null,
     garaged: false,
+    mods: { ...NO_MODS },
   };
   vehicles.push(v);
   return v;
@@ -188,6 +191,7 @@ function spawnGarageCars(): void {
     if (!slot || !CAR_SPECS[c.kind]) return;
     const v = addVehicle(makeCar(slot.x, slot.z, slot.heading), c.kind, c.color, null);
     v.garaged = true;
+    v.mods = { ...NO_MODS, ...c.mods };
   });
 }
 spawnGarageCars();
@@ -724,7 +728,16 @@ $("#btn-new").addEventListener("click", () => {
   newGame();
 });
 window.addEventListener("keydown", (ev) => {
-  if (ev.code === "Escape" && started) setPaused(!paused);
+  if (ev.code !== "Escape" || !started) return;
+  // Esc closes a shop or workshop menu first, otherwise toggles the pause menu.
+  const menu = document.querySelector("#menu");
+  if (menu && !menu.classList.contains("hidden")) {
+    menu.classList.add("hidden");
+    input.endFrame();
+    paused = false;
+    return;
+  }
+  setPaused(!paused);
 });
 window.addEventListener("keydown", () => audio.unlock());
 
@@ -895,7 +908,11 @@ function explode(x: number, z: number, source: Vehicle | null): void {
   }
   for (const v of vehicles) {
     if (v === source) continue;
-    if (applyBlastToCar(v.state, x, z) > 0 && v.ai) v.ai.stunned = Math.max(v.ai.stunned, 3);
+    const hp = v.state.health;
+    if (applyBlastToCar(v.state, x, z) > 0) {
+      if (v.ai) v.ai.stunned = Math.max(v.ai.stunned, 3);
+      if (v.mods.armor && !v.state.wrecked) v.state.health = hp - (hp - v.state.health) * armorFactor(v.mods);
+    }
   }
   for (const p of peds) {
     if (p.state === "gone") continue;
@@ -932,14 +949,17 @@ const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4);
 const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5);
 const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5);
 const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
+const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4);
+const depotMarker = new ZoneMarker(scene, 0xe1b12c, "Д", 5);
 const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6);
 const beam = new BeamMarker(scene, 0xff9f43, 9);
 const beamNext = new BeamMarker(scene, 0xff9f43, 9);
 const targetArrow = new TargetArrow(scene);
 garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
+shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, garage: false, paint: false };
+const inside = { contact: false, race: false, garage: false, paint: false, shop: false, depot: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -993,6 +1013,8 @@ function handleMissionEvents(events: MissionEvent[]): void {
     switch (e.type) {
       case "step":
         objectiveText = e.text;
+        // Passenger gets in once the taxi stops beside them.
+        if (taxi && e.index === 1 && taxi.passenger) taxi.passenger.state = "gone";
         break;
       case "checkpoint":
         audio.alert();
@@ -1003,6 +1025,23 @@ function handleMissionEvents(events: MissionEvent[]): void {
         audio.alert();
         break;
       case "done": {
+        if (e.mission.id === "taxi" && taxi?.fare) {
+          const pay = taxiFare(taxi.fare.distance, (e.mission.time ?? 0) - e.time, e.mission.time ?? 0);
+          addMoney(pay);
+          taxi.fares++;
+          taxi.earned += pay;
+          if (player.vehicle) {
+            const door = sideDoor(player.vehicle.state, 2.2);
+            emergePed(door.x, door.z, { x: door.x, z: door.z - 10 });
+          }
+          persist();
+          endMission();
+          showBanner(`Поездка оплачена: +$${pay}`);
+          setTimeout(() => {
+            if (taxi && !runner.active) nextFare();
+          }, 1500);
+          break;
+        }
         addMoney(e.reward);
         save.stats.missions++;
         let extra = "";
@@ -1010,7 +1049,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
           const best = save.bestRace === null || e.time < save.bestRace;
           if (best) save.bestRace = e.time;
           extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
-        } else if (!save.missionsDone.includes(e.mission.id)) {
+        } else if (e.mission.id !== "courier" && !save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
         persist();
@@ -1021,7 +1060,8 @@ function handleMissionEvents(events: MissionEvent[]): void {
       }
       case "fail":
         endMission();
-        showBanner(`Провал: ${e.reason}`);
+        if (taxi) endTaxiShift(e.reason);
+        else showBanner(`Провал: ${e.reason}`);
         break;
       default:
         break;
@@ -1049,7 +1089,7 @@ function updateMissions(dt: number): void {
       positions[key] = { x: mv.state.x, z: mv.state.z };
     }
     handleMissionEvents(
-      runner.update({ x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, destroyed }, dt),
+      runner.update({ x: player.x, z: player.z, vehicle: v ? v.missionKey ?? "any" : null, stars: wanted.level, speed: v ? speedOf(v.state) : player.speed, destroyed }, dt),
     );
   } else {
     const story = nextStory();
@@ -1066,29 +1106,22 @@ function updateMissions(dt: number): void {
     if (v.police || v.missionKey) showBanner("Эту машину в гараж не поставить");
     else if (v.garaged) showBanner("Машина уже в гараже");
     else {
-      storeInGarage(save, { kind: v.kind, color: v.visual.baseColor.getHex() });
+      storeInGarage(save, { kind: v.kind, color: v.visual.baseColor.getHex(), mods: { ...v.mods } });
       v.garaged = true;
       persist();
       showBanner("Машина в гараже");
     }
   }
   if (v && entered("paint", PLACES.paint.x, PLACES.paint.z, 6, speedOf(v.state) < 3)) {
-    if (save.money < PAINT_COST) showBanner(`Покраска стоит $${PAINT_COST}`);
-    else {
-      addMoney(-PAINT_COST);
-      v.state.health = 100;
-      v.state.burning = false;
-      v.state.fire = 0;
-      v.visual.baseColor.setHex(rng.pick(COLORS));
-      const hidden = wanted.level > 0 && !policeCanSee(player.x, player.z);
-      if (hidden) {
-        wanted.clear();
-        standDown();
-      }
-      persist();
-      showBanner(hidden ? "Новый цвет. Полиция вас потеряла" : wanted.level > 0 ? "Отремонтировано, но полиция всё видела" : "Машина как новая");
-    }
+    if (v.police) showBanner("Полицейскую машину здесь не возьмут");
+    else openWorkshop(v);
   }
+  if (!runner.active && entered("shop", PLACES.shop.x, PLACES.shop.z, 5, !v || speedOf(v.state) < 3)) openShop();
+  if (!runner.active && v && entered("depot", PLACES.depot.x, PLACES.depot.z, 6, speedOf(v.state) < 4)) {
+    startMission(makeCourierRun(rng, roadPoints, PLACES.depot));
+  }
+  if (v && !runner.active && v.kind === "taxi" && input.justPressed("KeyJ")) startTaxiShift();
+  if (taxi && runner.active && runner.mission?.id === "taxi" && (!v || v.kind !== "taxi")) failMission("вы вышли из такси");
 
   autosaveTimer -= dt;
   if (autosaveTimer <= 0) {
@@ -1097,12 +1130,162 @@ function updateMissions(dt: number): void {
   }
 }
 
+// ---------------------------------------------------------------- jobs, shop, workshop
+
+const roadPoints: Array<{ x: number; z: number }> = layout.intersections.map((it) => ({ x: it.x, z: it.z }));
+const curbside = walkGraph.nodes;
+let taxi: { fares: number; earned: number; fare: TaxiFare | null; passenger: Ped | null } | null = null;
+
+function startTaxiShift(): void {
+  taxi = { fares: 0, earned: 0, fare: null, passenger: null };
+  showBanner("Смена такси началась");
+  nextFare();
+}
+
+function nextFare(): void {
+  if (!taxi || !player.vehicle) return;
+  const fare = makeTaxiFare(rng, curbside, { x: player.x, z: player.z });
+  taxi.fare = fare;
+  // Put a waiting passenger at the kerb.
+  const p = peds.find((q) => q.state === "gone") ?? peds.reduce((a, b) => (Math.hypot(a.x - player.x, a.z - player.z) > Math.hypot(b.x - player.x, b.z - player.z) ? a : b));
+  p.x = fare.pickup.x;
+  p.z = fare.pickup.z;
+  p.y = 0;
+  p.vx = p.vy = p.vz = 0;
+  p.fall = 0;
+  p.speed = 0;
+  p.state = "wait";
+  taxi.passenger = p;
+  handleMissionEvents(runner.start(fare.mission));
+}
+
+function endTaxiShift(reason: string): void {
+  if (!taxi) return;
+  if (taxi.passenger && taxi.passenger.state === "wait") taxi.passenger.state = "walk";
+  const t = taxi;
+  taxi = null;
+  showBanner(`Смена окончена: ${reason}. Заказов ${t.fares}, заработано $${t.earned}`);
+}
+
+interface MenuItem {
+  label: string;
+  note?: string;
+  price?: number;
+  owned?: boolean;
+  action: () => void;
+}
+
+const menuEl = $<HTMLDivElement>("#menu");
+function openMenu(title: string, items: MenuItem[]): void {
+  paused = true;
+  input.endFrame();
+  menuEl.classList.remove("hidden");
+  const list = items
+    .map((it, i) => {
+      const cant = !it.owned && it.price !== undefined && save.money < it.price;
+      const right = it.owned ? "установлено" : it.price !== undefined ? `$${it.price.toLocaleString("ru-RU")}` : "";
+      return `<button class="menu-item" data-i="${i}" ${it.owned || cant ? "disabled" : ""}><span><b>${it.label}</b>${it.note ? `<small>${it.note}</small>` : ""}</span><span class="price">${right}</span></button>`;
+    })
+    .join("");
+  menuEl.innerHTML = `<div class="card"><h2>${title}</h2><p class="bal">На счету $${save.money.toLocaleString("ru-RU")}</p><div class="menu-list">${list}</div><div class="start-buttons"><button class="secondary" data-close>Закрыть</button></div></div>`;
+  menuEl.querySelectorAll<HTMLButtonElement>(".menu-item").forEach((b) =>
+    b.addEventListener("click", () => {
+      items[Number(b.dataset.i)].action();
+    }),
+  );
+  menuEl.querySelector("[data-close]")!.addEventListener("click", closeMenu);
+}
+function closeMenu(): void {
+  menuEl.classList.add("hidden");
+  input.endFrame();
+  paused = false;
+}
+
+/** Keep the garage copy of a car in sync after paint or mods. */
+function syncGarageEntry(v: Vehicle, oldColor: number): void {
+  if (!v.garaged) return;
+  const entry = save.garage.find((c) => c.kind === v.kind && c.color === oldColor);
+  if (entry) {
+    entry.color = v.visual.baseColor.getHex();
+    entry.mods = { ...v.mods };
+  }
+}
+
+function openShop(): void {
+  openMenu(
+    "Автосалон «Причал»",
+    SHOP.map((c) => ({
+      label: c.name,
+      note: `${Math.round(CAR_SPECS[c.kind].maxSpeed * 3.6)} км/ч`,
+      price: c.price,
+      action: () => {
+        const left = buy(save.money, c.price);
+        if (left === null) return;
+        save.money = left;
+        const lot = PLACES.shopLot;
+        const car = addVehicle(makeCar(lot.x, lot.z, lot.heading), c.kind, c.color, null);
+        car.garaged = true;
+        storeInGarage(save, { kind: c.kind, color: c.color, mods: { ...NO_MODS } });
+        persist();
+        closeMenu();
+        showBanner(`Куплено: ${c.name}. Машина у салона и в гараже`);
+      },
+    })),
+  );
+}
+
+function openWorkshop(v: Vehicle): void {
+  const items: MenuItem[] = [
+    {
+      label: "Ремонт и покраска",
+      note: "Чинит, тушит и сбивает розыск, если вас не видят",
+      price: PAINT_COST,
+      action: () => {
+        if (buy(save.money, PAINT_COST) === null) return;
+        addMoney(-PAINT_COST);
+        const old = v.visual.baseColor.getHex();
+        v.state.health = 100;
+        v.state.burning = false;
+        v.state.fire = 0;
+        v.visual.baseColor.setHex(rng.pick(COLORS));
+        syncGarageEntry(v, old);
+        const hidden = wanted.level > 0 && !policeCanSee(player.x, player.z);
+        if (hidden) {
+          wanted.clear();
+          standDown();
+        }
+        persist();
+        closeMenu();
+        showBanner(hidden ? "Новый цвет. Полиция вас потеряла" : wanted.level > 0 ? "Отремонтировано, но полиция всё видела" : "Машина как новая");
+      },
+    },
+    ...MOD_SHOP.map((m) => ({
+      label: m.name,
+      note: m.note,
+      price: m.price,
+      owned: v.mods[m.key],
+      action: () => {
+        if (v.mods[m.key] || buy(save.money, m.price) === null) return;
+        addMoney(-m.price);
+        v.mods[m.key] = true;
+        syncGarageEntry(v, v.visual.baseColor.getHex());
+        persist();
+        openWorkshop(v);
+        showBanner(`Установлено: ${m.name.toLowerCase()}`);
+      },
+    })),
+  ];
+  openMenu("Мастерская", items);
+}
+
 function syncMissionVisuals(dt: number): void {
   const story = nextStory();
   if (!runner.active && story) contactMarker.show(PLACES.contact.x, PLACES.contact.z);
   else contactMarker.hide();
   if (!runner.active) raceMarker.show(PLACES.race.x, PLACES.race.z);
   else raceMarker.hide();
+  if (!runner.active) depotMarker.show(PLACES.depot.x, PLACES.depot.z);
+  else depotMarker.hide();
   goalMarker.hide();
   beam.hide();
   beamNext.hide();
@@ -1119,7 +1302,7 @@ function syncMissionVisuals(dt: number): void {
     const mv = missionCars.get(step.target);
     if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, step.kind === "destroy" ? 0xff4d6d : 0x7bed9f, dt);
   }
-  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, garageMarker, paintMarker, goalMarker, shopMarker, depotMarker]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- simulation
@@ -1264,10 +1447,12 @@ function update(dt: number, now: number): void {
       v.wreckAge += dt;
     }
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
-    stepCar(s, specFor(v.kind), v.input, dt);
+    stepCar(s, moddedSpec(specFor(v.kind), v.mods), v.input, dt);
     const push = resolveCircleVsBuildings(layout, s.x, s.z, v.radius * 0.85);
     if (push) {
+      const hpBefore = s.health;
       const dmg = collideCar(s, push.x, push.z);
+      if (v.mods.armor) s.health = Math.min(100, hpBefore - (hpBefore - s.health) * armorFactor(v.mods));
       if (v === player.vehicle && dmg > 2 && now - lastCrash > 250) {
         audio.crash(dmg);
         shake = Math.max(shake, Math.min(0.8, dmg * 0.03));
@@ -1301,7 +1486,11 @@ function update(dt: number, now: number): void {
       const sa = speedOf(a.state);
       const sb = speedOf(b.state);
       const before = sa + sb;
+      const ha = a.state.health;
+      const hb = b.state.health;
       if (separateCars(a.state, b.state, a.radius, b.radius)) {
+        if (a.mods.armor) a.state.health = ha - (ha - a.state.health) * armorFactor(a.mods);
+        if (b.mods.armor) b.state.health = hb - (hb - b.state.health) * armorFactor(b.mods);
         const after = speedOf(a.state) + speedOf(b.state);
         const pv = a === player.vehicle ? a : b === player.vehicle ? b : null;
         if (pv) {
@@ -1551,10 +1740,11 @@ function updateHud(): void {
   if (v) carHpEl.style.width = `${v.state.health}%`;
   if (player.dead > 0) hintEl.textContent = "";
   else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? k("Машина горит! E — выйти", "Машина горит! Жмите «Сесть», чтобы выйти") : "Машина горит! Тормозите и выходите";
+  else if (v && v.kind === "taxi" && !runner.active) hintEl.textContent = k("J — начать смену такси", "Жмите «Работа», чтобы взять заказы");
   else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал · R — радио" : "Пробел — ручник · C — камера";
   else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
   else hintEl.textContent = nearestEnterable() ? k("E — сесть в машину", "Жмите «Сесть»") : touch.enabled ? "" : "WASD — идти · Shift — бежать";
-  touch.setMode(!!v, !!nearestEnterable());
+  touch.setMode(!!v, !!nearestEnterable(), !!v && v.kind === "taxi" && !runner.active);
   hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
   const stars = starsEl.children;
   for (let i = 0; i < stars.length; i++) stars[i].classList.toggle("on", i < wanted.level);
@@ -1568,7 +1758,8 @@ function updateHud(): void {
   briefEl.classList.toggle("show", briefTimer > 0 && runner.active);
   const left = runner.timeLeft;
   const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
-  objectiveEl.innerHTML = runner.active ? `<b>${runner.mission!.title}</b> ${objectiveText}${timer ? ` <span class="${left! < 20 ? "hot" : ""}">${timer}</span>` : ""}` : "";
+  const jobTitle = taxi && runner.mission?.id === "taxi" ? `Такси · заказ ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
+  objectiveEl.innerHTML = runner.active ? `<b>${jobTitle}</b> ${objectiveText}${timer ? ` <span class="${left! < 20 ? "hot" : ""}">${timer}</span>` : ""}` : "";
   const targets: Record<string, { x: number; z: number }> = {};
   for (const [key, mv] of missionCars) targets[key] = { x: mv.state.x, z: mv.state.z };
   const goal = runner.active ? runner.objective(targets) : null;
@@ -1598,10 +1789,12 @@ function updateHud(): void {
   const icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [
     { ...PLACES.garage, color: "#7bed9f", label: "Г" },
     { ...PLACES.paint, color: "#48dbfb", label: "П" },
+    { ...PLACES.shop, color: "#c56cf0", label: "А" },
   ];
   if (!runner.active) {
     if (nextStory()) icons.push({ ...PLACES.contact, color: "#ffd32a", label: "!", clamp: true });
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
+    icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
   }
   if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", clamp: true });
   minimap.draw(player.x, player.z, v ? v.state.heading : player.heading, dots, icons);
@@ -1681,6 +1874,8 @@ if (location.search.includes("debug")) {
     save: () => save,
     places: PLACES,
     missionCars,
+    taxi: () => taxi,
+    openShop,
     startMission: (id: string) => {
       const m = [...STORY, RACE].find((x) => x.id === id);
       if (m && !runner.active) startMission(m);

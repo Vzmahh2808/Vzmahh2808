@@ -11,6 +11,10 @@ export interface Places {
   paint: Point;
   contact: Point;
   race: Point;
+  shop: Point;
+  depot: Point;
+  /** Where cars bought at the shop are delivered. */
+  shopLot: { x: number; z: number; heading: number };
   garageSlots: Array<{ x: number; z: number; heading: number }>;
 }
 
@@ -22,6 +26,9 @@ export function places(n: number): Places {
     paint: road(n, 2, n / 2, 0, mid),
     contact: road(n, n / 2 - 1, n / 2 - 1, mid, 0),
     race: road(n, n / 2 + 2, n / 2 + 2, mid, 0),
+    shop: road(n, n / 2 + 1, n / 2, 0, mid),
+    depot: road(n, 3, n, mid, -2),
+    shopLot: { ...road(n, n / 2 + 1, n / 2, 3.6, mid + 12), heading: Math.PI / 2 },
     garageSlots: [-16, -9, 9].map((dx) => ({ x: garage.x + dx, z: garage.z + 3.6, heading: 0 })),
   };
 }
