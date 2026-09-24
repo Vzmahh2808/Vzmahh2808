@@ -40,11 +40,21 @@ export function inRect(r: Rect, x: number, z: number, pad = 0): boolean {
   return x >= r.x0 - pad && x <= r.x1 + pad && z >= r.z0 - pad && z <= r.z1 + pad;
 }
 
-export type Land = "city" | "bridge" | "island" | "water";
+/** Wooden piers: three on the island's south shore and the city marina on the east shore. */
+export const PIERS: Rect[] = [
+  { x0: 440, x1: 452, z0: -150, z1: -120 },
+  { x0: 500, x1: 512, z0: -150, z1: -120 },
+  { x0: 560, x1: 572, z0: -150, z1: -120 },
+  { x0: 266, x1: 296, z0: -158, z1: -150 },
+];
+export const PIER_TOP = 0.35;
+
+export type Land = "city" | "bridge" | "island" | "pier" | "water";
 
 /** What is under (x, z). The city is solid ground except past its east shore. */
 export function landAt(x: number, z: number, cityLimit: number): Land {
   if (inRect(BRIDGE, x, z)) return "bridge";
+  if (PIERS.some((p) => inRect(p, x, z))) return "pier";
   if (inRect(ISLAND, x, z) || inRect(CAPE, x, z)) return "island";
   if (Math.abs(z) <= cityLimit && x >= -cityLimit && x <= CITY_EAST_SHORE) return "city";
   return "water";
@@ -114,11 +124,7 @@ export function generateIsland(rng: Rng): IslandLayout {
   // Lighthouse on the cape.
   box(LIGHTHOUSE.x, LIGHTHOUSE.z, 5, 5, 26, 0xf5f6fa, "lighthouse");
 
-  const piers: Rect[] = [
-    { x0: 440, x1: 452, z0: -150, z1: -120 },
-    { x0: 500, x1: 512, z0: -150, z1: -120 },
-    { x0: 560, x1: 572, z0: -150, z1: -120 },
-  ];
+  const piers = PIERS.slice();
   const parking = [
     { x: 470, z: 3, heading: 0 },
     { x: 590, z: -3, heading: Math.PI },

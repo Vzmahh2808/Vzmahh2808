@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, LIGHTHOUSE, WATER_LEVEL, type IslandLayout, type Rect } from "./island";
+import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, LIGHTHOUSE, PIER_TOP, WATER_LEVEL, type IslandLayout, type Rect } from "./island";
 
 function colored(g: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   const c = new THREE.Color(color);
@@ -56,7 +56,7 @@ export function buildIslandMeshes(island: IslandLayout, lampHead: THREE.Material
 
   // Water east of the shore, and a sand strip where the city meets it.
   const ripple = rippleTexture();
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x1f4f6e, map: ripple, roughness: 0.18, metalness: 0.15, transparent: true, opacity: 0.94 });
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x1f4f6e, map: ripple, roughness: 0.3, metalness: 0.1, transparent: true, opacity: 0.94 });
   const water = new THREE.Mesh(new THREE.PlaneGeometry(1400, 2000), waterMat);
   water.rotation.x = -Math.PI / 2;
   water.position.set(CITY_EAST_SHORE + 700, WATER_LEVEL, 0);
@@ -112,7 +112,7 @@ export function buildIslandMeshes(island: IslandLayout, lampHead: THREE.Material
     }
   }
   // Piers.
-  for (const p of island.piers) solid.push(rectBox(p, -0.2, 0.35, 0x8d6e4c));
+  for (const p of island.piers) solid.push(rectBox(p, -0.2, PIER_TOP, 0x8d6e4c));
 
   // Cranes: four legs, a beam and a cab.
   for (const c of island.cranes) {
@@ -194,6 +194,8 @@ export function buildIslandMeshes(island: IslandLayout, lampHead: THREE.Material
       ripple.offset.x += dt * 0.004;
       ripple.offset.y += dt * 0.0025;
       waterMat.color.copy(tmp.copy(deep).lerp(sky, 0.3).multiplyScalar(1 - night * 0.6));
+      // A little self-light keeps the water readable when the sun is low.
+      waterMat.emissive.copy(tmp).multiplyScalar(0.28);
       beam.rotation.y += dt * 0.9;
       beamMat.opacity = night * 0.16;
       lanternMat.emissiveIntensity = 0.4 + night * 3;
