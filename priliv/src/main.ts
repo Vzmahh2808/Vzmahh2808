@@ -31,6 +31,9 @@ import { Radio } from "./audio/radio";
 import { TouchControls, isTouchDevice } from "./ui/touch";
 import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
+import { freshAir, landingDamage, stepVertical, type Air } from "./entities/jumps";
+import { ALL_STUNTS_BONUS, RAMPS, STUNT_REWARD, describeJump, finishJump, isCleanLanding, startJump, trackJump, type Jump } from "./game/stunts";
+import { buildRamps } from "./world/rampMesh";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
 import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
@@ -119,6 +122,8 @@ interface Vehicle {
   /** Already stored in the player's garage. */
   garaged: boolean;
   mods: CarMods;
+  /** Height above the ground: ramps and jumps. */
+  air: Air;
 }
 
 const vehicles: Vehicle[] = [];
@@ -141,6 +146,7 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     missionKey: null,
     garaged: false,
     mods: { ...NO_MODS },
+    air: freshAir(),
   };
   vehicles.push(v);
   return v;
@@ -214,6 +220,7 @@ function recycleAsTraffic(v: Vehicle): void {
   v.visual = buildCarVisual(fresh.kind, spec, fresh.color);
   v.wreckAge = 0;
   v.rearPrev = null;
+  v.air = freshAir();
   v.police = null;
   v.blame = -1e9;
   scene.add(v.visual.group);
@@ -790,6 +797,7 @@ function setPaused(on: boolean): void {
       `<dt>Лучший круг</dt><dd>${save.bestRace ? save.bestRace.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Лучшая регата</dt><dd>${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Победы в гонках</dt><dd>${save.stats.racesWon}</dd>` +
+      `<dt>Трюки</dt><dd>${save.stunts.done.length} из ${RAMPS.length}${save.stunts.best ? ` · рекорд ${save.stunts.best}` : ""}</dd>` +
       `<dt>Бизнесы</dt><dd>${BUSINESSES.filter((b) => stateOf(save.business, b.id).owned).length} из ${BUSINESSES.length} · $${hourlyIncome(save.business, BUSINESSES)}/ч</dd>` +
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
@@ -1632,6 +1640,69 @@ function syncBusinessMarkers(dt: number): void {
   }
 }
 
+// ---------------------------------------------------------------- stunt jumps
+
+scene.add(buildRamps(RAMPS, (x, z) => ground(x, z)));
+let jump: Jump | null = null;
+/** Slow motion while the player flies off a ramp. */
+let timeScale = 1;
+let airLayoutCache: typeof layout | null = null;
+
+function airLayout(): typeof layout {
+  return (airLayoutCache ??= { ...layout, buildings: layout.buildings.filter((b) => b.kind !== "rail") });
+}
+
+function handleVertical(v: Vehicle, prevX: number, prevZ: number, dt: number, now: number): void {
+  const s = v.state;
+  const ev = stepVertical(v.air, s.x, s.z, RAMPS, dt);
+  const mine = v === player.vehicle;
+  if (ev?.type === "blocked") {
+    // The tall end of a ramp is a wall.
+    const dmg = collideCar(s, prevX - s.x, prevZ - s.z);
+    if (mine && dmg > 2 && now - lastCrash > 250) {
+      audio.crash(dmg);
+      lastCrash = now;
+    }
+    return;
+  }
+  if (ev?.type === "launch" && mine) jump = startJump(ev.ramp, s.x, s.z, s.heading);
+  if (mine && jump && v.air.airborne) trackJump(jump, dt, v.air.y, s.heading);
+  if (ev?.type !== "land") return;
+  const clean = isCleanLanding(s.heading, s.vx, s.vz, ev.impact);
+  const dmg = landingDamage(ev.impact, !clean) * armorFactor(v.mods);
+  s.health = Math.max(0, s.health - dmg);
+  if (!clean) {
+    // A crooked landing scrubs speed and sends the car sliding.
+    s.vx *= 0.55;
+    s.vz *= 0.55;
+  }
+  if (!mine) return;
+  if (ev.impact > 5) {
+    audio.crash(ev.impact * (clean ? 0.6 : 1.4));
+    shake = Math.max(shake, Math.min(0.7, ev.impact * 0.04));
+  }
+  const j = jump;
+  jump = null;
+  if (!j || j.time < 0.5) return;
+  const r = finishJump(j, s.x, s.z, clean);
+  if (!clean) {
+    showBanner("Неудачное приземление");
+    return;
+  }
+  if (r.score > save.stunts.best) save.stunts.best = r.score;
+  if (r.unique && j.ramp && !save.stunts.done.includes(j.ramp.id)) {
+    save.stunts.done.push(j.ramp.id);
+    addMoney(STUNT_REWARD);
+    const all = save.stunts.done.length === RAMPS.length;
+    if (all) addMoney(ALL_STUNTS_BONUS);
+    audio.alert();
+    showBanner(all ? `Все трюки выполнены! +$${STUNT_REWARD + ALL_STUNTS_BONUS}` : `Уникальный прыжок ${save.stunts.done.length} из ${RAMPS.length}! +$${STUNT_REWARD} · ${describeJump(r)}`);
+  } else if (j.ramp && !save.stunts.done.includes(j.ramp.id)) {
+    showBanner(`${describeJump(r)} · +${r.score} очков · до цели ${Math.ceil(j.ramp.goal - r.distance)} м`);
+  } else showBanner(`${describeJump(r)} · +${r.score} очков`);
+  persist();
+}
+
 // ---------------------------------------------------------------- street races
 
 const TRACKS = tracks(layout.n);
@@ -2079,7 +2150,14 @@ function update(dt: number, now: number): void {
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
     const prevX = s.x;
     const prevZ = s.z;
-    stepCar(s, moddedSpec(specFor(v.kind), v.mods), v.input, dt);
+    if (v.air.airborne) {
+      // Ballistic: no grip, no engine; the player can spin the car with the steering.
+      s.x += s.vx * dt;
+      s.z += s.vz * dt;
+      if (v === player.vehicle) s.heading += v.input.steer * 3.2 * dt;
+      v.rearPrev = null;
+    } else stepCar(s, moddedSpec(specFor(v.kind), v.mods), v.input, dt);
+    handleVertical(v, prevX, prevZ, dt, now);
     // Drivers other than the player stop at the water's edge (police chasing a boat, mostly).
     if (v !== player.vehicle && !s.wrecked && land(s.x, s.z) === "water" && land(prevX, prevZ) !== "water") {
       s.x = prevX;
@@ -2087,7 +2165,8 @@ function update(dt: number, now: number): void {
       s.vx = 0;
       s.vz = 0;
     }
-    const push = resolveCircleVsBuildings(layout, s.x, s.z, v.radius * 0.85);
+    // High in the air a car clears the bridge rails.
+    const push = resolveCircleVsBuildings(v.air.airborne && v.air.y > 1.2 ? airLayout() : layout, s.x, s.z, v.radius * 0.85);
     if (push) {
       const hpBefore = s.health;
       const dmg = collideCar(s, push.x, push.z);
@@ -2102,7 +2181,7 @@ function update(dt: number, now: number): void {
     const cl = clampWorld(s.x, s.z, WORLD_LIMIT);
     if (cl.x !== s.x || cl.z !== s.z) collideCar(s, cl.x - s.x, cl.z - s.z);
     // Driving off the quay: the car sinks and is lost.
-    if (!s.wrecked && land(s.x, s.z) === "water") {
+    if (!s.wrecked && !v.air.airborne && land(s.x, s.z) === "water") {
       s.wrecked = true;
       s.burning = false;
       s.health = 0;
@@ -2203,6 +2282,7 @@ function update(dt: number, now: number): void {
   }
 
   stepCops(dt);
+  timeScale = player.vehicle?.air.airborne && jump?.ramp ? 0.4 : 1;
   stepStreetRace(dt);
   updateBusinesses(dt);
   managePolice(dt);
@@ -2365,7 +2445,12 @@ function emitVehicleFx(v: Vehicle, dt: number): void {
 function syncVisuals(dt: number): void {
   for (const v of vehicles) {
     const braking = v.input.brake || v.input.handbrake || (v.input.throttle < 0 && forwardSpeed(v.state) > 0.5);
-    syncCarVisual(v.visual, v.state, braking, ground(v.state.x, v.state.z), dt);
+    syncCarVisual(v.visual, v.state, braking, ground(v.state.x, v.state.z) + v.air.y, dt);
+    // Nose follows the flight path in the air and the slope on a ramp.
+    const r = v.air.ramp;
+    const onSlope = !v.air.airborne && r && v.air.y > 0 ? Math.atan2(r.height, r.length) * Math.cos(v.state.heading - r.heading) : 0;
+    const pitch = v.air.airborne ? Math.max(-0.5, Math.min(0.4, Math.atan2(v.air.vy, Math.max(4, speedOf(v.state))))) : onSlope;
+    v.visual.group.rotation.z += (pitch - v.visual.group.rotation.z) * Math.min(1, dt * 10);
     flashSiren(v.visual, !!v.police && v.police.mode !== "patrol" && !v.state.wrecked && v !== player.vehicle, simTime);
     emitVehicleFx(v, dt);
   }
@@ -2492,6 +2577,7 @@ function updateHud(): void {
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
     icons.push({ ...MARINA, color: "#00d2d3", label: "Л" });
+    for (const r of RAMPS) if (!save.stunts.done.includes(r.id)) icons.push({ x: r.x, z: r.z, color: "#fdcb6e", label: "Т" });
     for (const b of BUSINESSES) {
       const st = stateOf(save.business, b.id);
       icons.push({ ...b.at, color: !st.owned ? "#a29bfe" : st.raid > 0 ? (blink ? "#ff4757" : "#ffffff") : "#2ecc71", label: st.raid > 0 ? "!" : "$", clamp: st.raid > 0 });
@@ -2520,7 +2606,7 @@ function frame(now: number): void {
   fpsWall += raw;
   const t0 = performance.now();
   if (!paused) {
-    accumulator += dt;
+    accumulator += dt * timeScale;
     let steps = 0;
     while (accumulator >= FIXED && steps < 6) {
       update(FIXED, now);
@@ -2582,6 +2668,9 @@ if (location.search.includes("debug")) {
     policeBoat: () => policeBoat,
     street: () => street,
     businesses: BUSINESSES,
+    ramps: RAMPS,
+    jump: () => jump,
+    timeScale: () => timeScale,
     tickBusiness: (hours: number) => updateBusinesses(hours * SECONDS_PER_HOUR),
     startStreetRace: (i: number) => player.vehicle && startStreetRace(TRACKS[i], player.vehicle),
     enterBoat: (i: number) => enterBoat(boats[i]),

@@ -28,6 +28,8 @@ export interface SaveData {
   stats: { missions: number; arrests: number; deaths: number; carsDestroyed: number; racesWon: number };
   /** Businesses bought, their tills and any shakedown under way. */
   business: Holdings;
+  /** Unique stunt jumps cleared, and the best score of any jump. */
+  stunts: { done: string[]; best: number };
 }
 
 export interface KeyValueStore {
@@ -50,6 +52,7 @@ export function freshSave(): SaveData {
     quality: "auto",
     stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0, racesWon: 0 },
     business: freshHoldings(),
+    stunts: { done: [], best: 0 },
   };
 }
 
@@ -118,6 +121,10 @@ export function parseSave(raw: string | null): SaveData | null {
       racesWon: num(data.stats?.racesWon, 0),
     },
     business: parseHoldings(data.business),
+    stunts: {
+      done: Array.isArray(data.stunts?.done) ? [...new Set(data.stunts.done.filter((d): d is string => typeof d === "string"))] : [],
+      best: Math.max(0, Math.floor(num(data.stunts?.best, 0))),
+    },
   };
 }
 
