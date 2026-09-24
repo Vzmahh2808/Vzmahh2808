@@ -3,7 +3,7 @@
  * of the first block at or after the announced slot and, after the round, the organizer's
  * secret; from those two anyone can derive the dungeon seed and re-play every published replay.
  */
-import type { Replay } from "../game/replay";
+import { verifyReplay, type Replay } from "../game/replay";
 
 export const TOURNAMENT_SEED_DOMAIN = "dungeon-heart:v2";
 
@@ -43,4 +43,46 @@ export function canonicalReplay(replay: Replay): string {
 
 export async function replayHash(replay: Replay): Promise<Uint8Array> {
   return sha256(canonicalReplay(replay));
+}
+
+/** What the organizer publishes after the reveal: enough for anyone to re-check every run. */
+export interface TournamentBundle {
+  tournament: string;
+  /** Hex, as recorded by the program. */
+  slotHash: string;
+  /** Hex, as revealed on-chain. */
+  secret: string;
+  runs: { player: string; score: number; replayHash: string; replay: Replay }[];
+}
+
+export interface BundleCheck {
+  seed: number;
+  runs: { player: string; score: number; replayHash: string; ok: boolean; error?: string }[];
+}
+
+/**
+ * Offline check of a published bundle: every replay must use the tournament seed, hash to
+ * the published hash and re-play to the claimed score. Comparing the hashes and scores with
+ * the program's accounts is the online half (npm run tournament -- verify).
+ */
+export async function verifyBundle(bundle: TournamentBundle): Promise<BundleCheck> {
+  const seed = await deriveTournamentSeed(bundle.tournament, fromHex(bundle.slotHash), fromHex(bundle.secret));
+  const runs = [];
+  for (const run of bundle.runs) {
+    const base = { player: run.player, score: run.score, replayHash: run.replayHash };
+    const hash = toHex(await replayHash(run.replay));
+    if (hash !== run.replayHash) {
+      runs.push({ ...base, ok: false, error: "хеш записи не совпадает" });
+      continue;
+    }
+    if (run.replay.seed !== seed) {
+      runs.push({ ...base, ok: false, error: "партия сыграна не на seed турнира" });
+      continue;
+    }
+    const result = verifyReplay(run.replay);
+    if (!result.ok) runs.push({ ...base, ok: false, error: result.error });
+    else if (result.summary.score !== run.score) runs.push({ ...base, ok: false, error: `запись даёт ${result.summary.score} очков` });
+    else runs.push({ ...base, ok: true });
+  }
+  return { seed, runs };
 }

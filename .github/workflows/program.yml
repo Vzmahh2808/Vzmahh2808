@@ -2,9 +2,9 @@ name: program
 
 on:
   push:
-    paths: ["roguelike/program/**", ".github/workflows/program.yml"]
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
   pull_request:
-    paths: ["roguelike/program/**", ".github/workflows/program.yml"]
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
   workflow_dispatch:
 
 concurrency:

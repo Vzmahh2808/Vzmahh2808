@@ -18,6 +18,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
+#[cfg(test)]
+mod fixtures;
 pub mod logic;
 pub mod state;
 
