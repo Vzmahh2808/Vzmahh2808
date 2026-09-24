@@ -1,0 +1,46 @@
+name: program
+
+on:
+  push:
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
+  pull_request:
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: program-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: roguelike/program
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/solana
+            roguelike/program/target
+          key: program-${{ runner.os }}-${{ hashFiles('roguelike/program/Cargo.lock') }}
+          restore-keys: program-${{ runner.os }}-
+      - name: Install the Solana toolchain (Agave)
+        working-directory: .
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - run: solana --version && cargo build-sbf --version
+      - name: Unit tests
+        run: cargo test -p dungeon-arena
+      - name: Build the program
+        run: cargo build-sbf --manifest-path programs/dungeon-arena/Cargo.toml
+      - name: Integration tests in LiteSVM
+        run: cargo test -p dungeon-arena-integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dungeon-arena-program
+          path: roguelike/program/target/deploy/dungeon_arena.so

@@ -1,0 +1,92 @@
+{
+  "accounts": {
+    "entry": {
+      "data": "3f129871d7f6ddfa09090909090909090909090909090909090909090909090909090909090909091515151515151515151515151515151515151515151515151515151515151515020184030000000000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a0100fd",
+      "space": 117
+    },
+    "tournament": {
+      "data": "af8b77f273c2395c0101010101010101010101010101010101010101010101010101010101010101020202020202020202020202020202020202020202020202020202020202020203030303030303030303030303030303030303030303030303030303030303030a000000323032362d31302d3031010015cd5b0700000000abababababababababababababababababababababababababababababababab0117cd5b0700000000333333333333333333333333333333333333333333333333333333333333333301070707070707070707070707070707070707070707070707070707070707070740420f000000000003803bb16a00000000109bb26a00000000f4017017b80be803000000000107000000070000003072bc0000000000021515151515151515151515151515151515151515151515151515151515151515840300000000000084cd5b07000000001616161616161616161616161616161616161616161616161616161616161616c201000000000000b6cd5b0700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000fe",
+      "leaderboard": [
+        [
+          "2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr",
+          900,
+          123456900
+        ],
+        [
+          "2VDW9dFE1ZXz4zWAbaBDQFynNVdRpQ73HyfSHMzBSL6Z",
+          450,
+          123456950
+        ]
+      ],
+      "space": 552
+    }
+  },
+  "errorCodeOffset": 6000,
+  "instructions": {
+    "cancel": {
+      "data": "e8dbdf29dbecdcbe"
+    },
+    "claim": {
+      "data": "3ec6d6c1d59f6cd2"
+    },
+    "createTournament": {
+      "args": {
+        "attemptsPerEntry": 3,
+        "endTs": 1790000000,
+        "entryFee": 1000000,
+        "id": "2026-10-01",
+        "payoutBps": [
+          6000,
+          3000,
+          1000,
+          0,
+          0
+        ],
+        "rakeBps": 500,
+        "revealDeadlineTs": 1790090000,
+        "rulesVersion": 1,
+        "secretCommitment": "abababababababababababababababababababababababababababababababab",
+        "seedSlot": 123456789
+      },
+      "data": "9e89e9e74984bf440a000000323032362d31302d3031010015cd5b0700000000abababababababababababababababababababababababababababababababab40420f000000000003803bb16a00000000109bb26a00000000f4017017b80be80300000000"
+    },
+    "enter": {
+      "data": "8b31d172585b4d86"
+    },
+    "finalize": {
+      "data": "ab3dda387f730cd9"
+    },
+    "fund": {
+      "amount": 5000000,
+      "data": "dabc6fdd9871ae07404b4c0000000000"
+    },
+    "recordSlotHash": {
+      "data": "481a6265fe73f18c"
+    },
+    "refund": {
+      "data": "0260b7fb3fd02e2e"
+    },
+    "reveal": {
+      "data": "09233bbea7f94c730707070707070707070707070707070707070707070707070707070707070707",
+      "secret": "0707070707070707070707070707070707070707070707070707070707070707"
+    },
+    "submitResult": {
+      "data": "f02a59b40aef09d6d2040000000000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "replayHash": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+      "score": 1234
+    },
+    "withdraw": {
+      "data": "b712469c946da122"
+    }
+  },
+  "pdas": {
+    "authority": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+    "entry": "GWT27MkxAKzSCURYrpb8U2gqVn3yUZpeisgWzCHLh8G4",
+    "id": "2026-10-01",
+    "player": "2RJD1KnDRGEkvuFfAGrJ7PD28LRE9LRDjZznDywagzmr",
+    "tournament": "CB5m7PXVonTHVMvuMMvLWxacVeCB3cmK6NxrsVoPjRmM",
+    "tournamentBump": 254,
+    "vault": "5bEWBhtkGPqB8iycCrPeHA64nCfK3YLfZP5MggbUEhYe"
+  },
+  "programId": "2v5bvVWahuuibFqe9byqwJAVbUynx6EifhWKJwHsPvpE"
+}

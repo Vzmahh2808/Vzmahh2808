@@ -9,9 +9,17 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "sim": "vite-node scripts/sim.ts"
+    "sim": "vite-node scripts/sim.ts",
+    "verify": "vite-node scripts/verify.ts",
+    "challenge": "vite-node scripts/challenge.ts",
+    "arena": "vite-node scripts/arena.ts",
+    "http-agent": "vite-node scripts/http-agent.ts",
+    "play": "vite-node scripts/play.ts",
+    "tournament": "vite-node scripts/tournament.ts"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "@solana/web3.js": "^1.99.0",
     "@types/node": "^26.6.2",
     "typescript": "^5.6.0",
     "vite": "^6.0.0",

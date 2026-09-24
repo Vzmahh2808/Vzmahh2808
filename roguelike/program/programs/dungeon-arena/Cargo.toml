@@ -1,0 +1,32 @@
+[package]
+name = "dungeon-arena"
+version = "0.1.0"
+description = "Tournaments for the Heart of the Dungeon agent arena: entry fees, prize pool, commit-reveal seed from a Solana slot hash"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "dungeon_arena"
+
+[features]
+default = []
+no-entrypoint = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = "1.2.0"
+anchor-spl = { version = "1.2.0", default-features = false, features = ["token", "token_2022"] }
+solana-sdk-ids = "3"
+solana-sha256-hasher = { version = "3", features = ["sha2"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

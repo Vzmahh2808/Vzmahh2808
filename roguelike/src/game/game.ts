@@ -1,3 +1,4 @@
+import { encodeAction, type Action } from "./actions";
 import { Rng } from "./rng";
 import {
   DEFAULT_DUNGEON,
@@ -91,6 +92,7 @@ export class Game {
       status: "playing",
       nextMonsterId: 1,
       deathCause: "",
+      actions: "",
     };
     const game = new Game(state);
     game.buildLevel();
@@ -259,9 +261,42 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- player actions (return true when a turn passed)
+  // Each public action records itself in `state.actions` when accepted, so any run can be replayed.
 
   movePlayer(dx: number, dy: number): boolean {
+    return this.track({ type: "move", dx, dy }, this.tryStep(dx, dy));
+  }
+
+  wait(): boolean {
+    return this.track({ type: "wait" }, this.tryWait());
+  }
+
+  pickUp(): boolean {
+    return this.track({ type: "pickup" }, this.tryPickUp());
+  }
+
+  descend(): boolean {
+    return this.track({ type: "descend" }, this.tryDescend());
+  }
+
+  dropItem(index: number): boolean {
+    return this.track({ type: "drop", index }, this.tryDrop(index));
+  }
+
+  /** Use a potion/scroll, or equip a weapon/armor. */
+  useItem(index: number): boolean {
+    return this.track({ type: "use", index }, this.tryUse(index));
+  }
+
+  private track(action: Action, accepted: boolean): boolean {
+    if (accepted && this.state.actions !== undefined) this.state.actions += encodeAction(action);
+    return accepted;
+  }
+
+  private tryStep(dx: number, dy: number): boolean {
     if (this.state.status !== "playing") return false;
+    // Only single steps: a longer jump would skip tiles, and a zero step would be a disguised wait.
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) return false;
     const p = this.player;
     const tx = p.x + dx;
     const ty = p.y + dy;
@@ -302,13 +337,13 @@ export class Game {
     if (tileAt(this.state.map, p.x, p.y) === Tile.StairsDown) this.log("Здесь лестница вниз. Нажмите >, чтобы спуститься.", "warn");
   }
 
-  wait(): boolean {
+  private tryWait(): boolean {
     if (this.state.status !== "playing") return false;
     this.endTurn();
     return true;
   }
 
-  pickUp(): boolean {
+  private tryPickUp(): boolean {
     if (this.state.status !== "playing") return false;
     const p = this.player;
     const here = this.itemsAt(p.x, p.y);
@@ -340,7 +375,7 @@ export class Game {
     return true;
   }
 
-  descend(): boolean {
+  private tryDescend(): boolean {
     if (this.state.status !== "playing") return false;
     const p = this.player;
     if (tileAt(this.state.map, p.x, p.y) !== Tile.StairsDown) {
@@ -356,7 +391,7 @@ export class Game {
     return true;
   }
 
-  dropItem(index: number): boolean {
+  private tryDrop(index: number): boolean {
     if (this.state.status !== "playing") return false;
     const p = this.player;
     const item = p.inventory[index];
@@ -368,8 +403,7 @@ export class Game {
     return true;
   }
 
-  /** Use a potion/scroll, or equip a weapon/armor. */
-  useItem(index: number): boolean {
+  private tryUse(index: number): boolean {
     if (this.state.status !== "playing") return false;
     const p = this.player;
     const item = p.inventory[index];
