@@ -24,6 +24,12 @@ export interface CarState {
   steer: number; // current steering angle
   wheelSpin: number; // accumulated wheel rotation for visuals
   health: number;
+  /** True once health hit zero: the car is on fire and counting down to an explosion. */
+  burning: boolean;
+  /** Seconds left before a burning car explodes. */
+  fire: number;
+  /** Burnt-out shell after an explosion; cannot be driven. */
+  wrecked: boolean;
 }
 
 export interface CarInput {
@@ -41,11 +47,16 @@ export const CAR_SPECS: Record<string, CarSpec> = {
 };
 
 export function makeCar(x: number, z: number, heading: number): CarState {
-  return { x, z, heading, vx: 0, vz: 0, steer: 0, wheelSpin: 0, health: 100 };
+  return { x, z, heading, vx: 0, vz: 0, steer: 0, wheelSpin: 0, health: 100, burning: false, fire: 0, wrecked: false };
 }
 
 export function forwardSpeed(c: CarState): number {
   return c.vx * Math.cos(c.heading) + c.vz * Math.sin(c.heading);
+}
+
+/** Sideways speed relative to the car's heading; large values mean the car is sliding. */
+export function lateralSpeed(c: CarState): number {
+  return -c.vx * Math.sin(c.heading) + c.vz * Math.cos(c.heading);
 }
 
 export function speedOf(c: CarState): number {

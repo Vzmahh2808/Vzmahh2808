@@ -188,3 +188,25 @@ export function clampToCity(layout: CityLayout, x: number, z: number): { x: numb
   const lim = layout.half + ROAD_WIDTH / 2 + 30;
   return { x: Math.max(-lim, Math.min(lim, x)), z: Math.max(-lim, Math.min(lim, z)) };
 }
+
+export const ROAD_TOP = 0.05;
+export const PAVEMENT_TOP = 0.25;
+
+/** True on the asphalt part of a road (not the sidewalks). */
+export function isOnCarriageway(n: number, x: number, z: number): boolean {
+  const half = (n / 2) * PITCH;
+  if (Math.abs(x) > half + ROAD_WIDTH / 2 || Math.abs(z) > half + ROAD_WIDTH / 2) return false;
+  const fx = mod(x + half + ROAD_WIDTH / 2, PITCH);
+  const fz = mod(z + half + ROAD_WIDTH / 2, PITCH);
+  const inX = fx >= SIDEWALK && fx < ROAD_WIDTH - SIDEWALK;
+  const inZ = fz >= SIDEWALK && fz < ROAD_WIDTH - SIDEWALK;
+  return inX || inZ;
+}
+
+/** Height of the walkable surface at (x, z): asphalt, raised pavement, or the grass outside town. */
+export function surfaceHeight(n: number, x: number, z: number): number {
+  const half = (n / 2) * PITCH;
+  if (isOnCarriageway(n, x, z)) return ROAD_TOP;
+  const inside = Math.abs(x) <= half + ROAD_WIDTH / 2 - SIDEWALK && Math.abs(z) <= half + ROAD_WIDTH / 2 - SIDEWALK;
+  return inside ? PAVEMENT_TOP : 0;
+}

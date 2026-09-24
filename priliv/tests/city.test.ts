@@ -35,3 +35,18 @@ describe("city", () => {
     expect(resolveCircleVsBuildings(city, 0, 0, 1)).toBeNull();
   });
 });
+
+import { isOnCarriageway, surfaceHeight, PAVEMENT_TOP, ROAD_TOP, SIDEWALK } from "../src/world/city";
+
+describe("surfaces", () => {
+  it("distinguishes asphalt from sidewalks", () => {
+    expect(isOnCarriageway(8, 0, 0)).toBe(true);
+    expect(surfaceHeight(8, 0, 0)).toBe(ROAD_TOP);
+    // Just inside the kerb on the sidewalk band next to the central road.
+    const kerb = ROAD_WIDTH / 2 - SIDEWALK / 2;
+    expect(isOnCarriageway(8, kerb, 20)).toBe(false);
+    expect(surfaceHeight(8, kerb, 20)).toBe(PAVEMENT_TOP);
+    // Far outside town is plain ground.
+    expect(surfaceHeight(8, 5000, 5000)).toBe(0);
+  });
+});
