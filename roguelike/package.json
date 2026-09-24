@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "sim": "vite-node scripts/sim.ts"
+    "sim": "vite-node scripts/sim.ts",
+    "verify": "vite-node scripts/verify.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
