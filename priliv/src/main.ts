@@ -1,7 +1,9 @@
 import * as THREE from "three";
 import { Rng } from "./core/rng";
 import { Input } from "./core/input";
-import { PITCH, ROAD_WIDTH, clampToCity, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
+import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
+import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, clampWorld, generateIsland, landAt } from "./world/island";
+import { buildIslandMeshes } from "./world/islandMesh";
 import { buildCityMeshes } from "./world/cityMesh";
 import { buildWalkGraph } from "./world/sidewalks";
 import { CAR_SPECS, CIVILIAN_KINDS, NO_MODS, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
@@ -72,7 +74,20 @@ const layout = generateCity(rng, 8);
 const cityMeshes = buildCityMeshes(layout);
 scene.add(cityMeshes.group);
 const walkGraph = buildWalkGraph(layout);
-const ground = (x: number, z: number) => surfaceHeight(layout.n, x, z);
+
+// The port island: its colliders join the city's so every collision check sees them.
+const island = generateIsland(new Rng(seed ^ 0x15));
+layout.buildings.push(...island.colliders);
+const islandMeshes = buildIslandMeshes(island, cityMeshes.lampHeadMaterial);
+scene.add(islandMeshes.group);
+const WORLD_LIMIT = layout.half + ROAD_WIDTH / 2 + 30;
+const land = (x: number, z: number) => landAt(x, z, WORLD_LIMIT);
+const ground = (x: number, z: number) => {
+  const l = land(x, z);
+  if (l === "city") return surfaceHeight(layout.n, x, z);
+  if (l === "water") return -1.2;
+  return ISLAND_TOP;
+};
 
 const smoke = new ParticleSystem(2500, false);
 const fire = new ParticleSystem(2000, true);
@@ -195,6 +210,7 @@ function spawnGarageCars(): void {
   });
 }
 spawnGarageCars();
+for (const p of island.parking) addVehicle(makeCar(p.x, p.z, p.heading), rng.pick(CIVILIAN_KINDS), rng.pick(COLORS), null);
 
 // ---------------------------------------------------------------- atmosphere
 
@@ -291,6 +307,7 @@ function applyAtmosphere(dt: number): void {
   } else copLight.intensity = 0;
 
   rainFx.update(dt, rainI, camera.position.x, camera.position.y, camera.position.z);
+  islandMeshes.update(dt, scene.background as THREE.Color, L.night);
 }
 
 interface Cop {
@@ -605,7 +622,12 @@ recyclePeds(PED_COUNT, 6);
 
 const input = new Input();
 const audio = new CarAudio();
-const minimap = new Minimap($<HTMLCanvasElement>("#minimap"), layout);
+const minimap = new Minimap($<HTMLCanvasElement>("#minimap"), layout, {
+  maxX: CAPE.x1 + 60,
+  shoreX: CITY_EAST_SHORE,
+  land: [ISLAND, CAPE, BRIDGE],
+  roads: [...ISLAND_ROADS, BRIDGE],
+});
 const speedEl = $("#speed .num");
 const hintEl = $("#hint");
 const healthEl = $<HTMLDivElement>("#health .fill");
@@ -832,7 +854,7 @@ function showBanner(text: string): void {
   banner = { text, ttl: 3.5 };
 }
 
-function killPlayer(): void {
+function killPlayer(title = "Вы погибли"): void {
   if (player.dead > 0) return;
   player.dead = 3.5;
   player.health = 0;
@@ -843,7 +865,7 @@ function killPlayer(): void {
   save.money -= fee;
   save.stats.deaths++;
   persist();
-  showOverlay("Вы погибли", fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
+  showOverlay(title, fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
 }
 
 /** Test switches, only reachable through the ?debug hook. */
@@ -987,6 +1009,7 @@ function startMission(m: Mission): void {
     v.missionKey = key;
     missionCars.set(key, v);
   }
+  if (m.id === "ch2-bridge") setTimeout(() => showBanner("Глава 2: Остров"), 200);
   $("#brief-title").textContent = m.title;
   $("#brief-text").textContent = m.brief;
   briefTimer = 7;
@@ -1093,7 +1116,8 @@ function updateMissions(dt: number): void {
     );
   } else {
     const story = nextStory();
-    if (story && entered("contact", PLACES.contact.x, PLACES.contact.z, 5, slow)) startMission(story);
+    const at = story?.contact ?? PLACES.contact;
+    if (story && entered("contact", at.x, at.z, 5, slow)) startMission(story);
     else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) startMission(RACE);
   }
 
@@ -1280,7 +1304,7 @@ function openWorkshop(v: Vehicle): void {
 
 function syncMissionVisuals(dt: number): void {
   const story = nextStory();
-  if (!runner.active && story) contactMarker.show(PLACES.contact.x, PLACES.contact.z);
+  if (!runner.active && story) contactMarker.show((story.contact ?? PLACES.contact).x, (story.contact ?? PLACES.contact).z);
   else contactMarker.hide();
   if (!runner.active) raceMarker.show(PLACES.race.x, PLACES.race.z);
   else raceMarker.hide();
@@ -1391,9 +1415,10 @@ function update(dt: number, now: number): void {
       player.x += push.x;
       player.z += push.z;
     }
-    const cl = clampToCity(layout, player.x, player.z);
+    const cl = clampWorld(player.x, player.z, WORLD_LIMIT);
     player.x = cl.x;
     player.z = cl.z;
+    if (land(player.x, player.z) === "water") killPlayer("Вы утонули");
     for (const v of vehicles) {
       const dx = player.x - v.state.x;
       const dz = player.z - v.state.z;
@@ -1460,8 +1485,22 @@ function update(dt: number, now: number): void {
       }
       if (v.ai) v.ai.stunned = Math.max(v.ai.stunned, 1.5);
     }
-    const cl = clampToCity(layout, s.x, s.z);
+    const cl = clampWorld(s.x, s.z, WORLD_LIMIT);
     if (cl.x !== s.x || cl.z !== s.z) collideCar(s, cl.x - s.x, cl.z - s.z);
+    // Driving off the quay: the car sinks and is lost.
+    if (!s.wrecked && land(s.x, s.z) === "water") {
+      s.wrecked = true;
+      s.burning = false;
+      s.health = 0;
+      v.wreckAge = 30;
+      v.ai = null;
+      if (v.police) v.police.mode = "patrol";
+      if (v === player.vehicle) killPlayer("Вы утонули");
+    }
+    if (s.wrecked && land(s.x, s.z) === "water") {
+      s.vx *= 0.9;
+      s.vz *= 0.9;
+    }
 
     const sp = speedOf(s);
     // Fast cars scare people: the player's car always, others when they mount the sidewalk.
@@ -1792,7 +1831,8 @@ function updateHud(): void {
     { ...PLACES.shop, color: "#c56cf0", label: "А" },
   ];
   if (!runner.active) {
-    if (nextStory()) icons.push({ ...PLACES.contact, color: "#ffd32a", label: "!", clamp: true });
+    const next = nextStory();
+    if (next) icons.push({ ...(next.contact ?? PLACES.contact), color: "#ffd32a", label: "!", clamp: true });
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
   }
@@ -1875,6 +1915,7 @@ if (location.search.includes("debug")) {
     places: PLACES,
     missionCars,
     taxi: () => taxi,
+    land,
     openShop,
     startMission: (id: string) => {
       const m = [...STORY, RACE].find((x) => x.id === id);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MissionRunner, type Mission, type MissionContext } from "../src/game/missions";
-import { places, raceMission, storyMissions } from "../src/game/story";
+import { chapterOne, places, raceMission, storyMissions } from "../src/game/story";
 import { MemoryStore, freshSave, loadSave, parseSave, storeInGarage, writeSave, GARAGE_SLOTS } from "../src/game/save";
 import { Rng } from "../src/core/rng";
 import { generateCity, isOnCarriageway, resolveCircleVsBuildings } from "../src/world/city";
@@ -75,7 +75,8 @@ describe("mission runner", () => {
       ...places(8).garageSlots,
       ...(raceMission(8).steps[0] as { points: { x: number; z: number }[] }).points,
     ] as { x: number; z: number }[];
-    for (const m of storyMissions(8)) {
+    // Chapter two lives on the island; its points are checked in island.test.ts.
+    for (const m of chapterOne(8)) {
       for (const s of m.steps) if (s.kind === "goto") pts.push(s.at);
       for (const sp of Object.values(m.spawns ?? {})) pts.push(sp);
     }

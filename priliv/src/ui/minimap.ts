@@ -7,26 +7,37 @@ export class Minimap {
   private base: HTMLCanvasElement;
   private size: number;
 
-  constructor(canvas: HTMLCanvasElement, layout: CityLayout) {
+  constructor(canvas: HTMLCanvasElement, layout: CityLayout, extras?: { maxX: number; land: Array<{ x0: number; x1: number; z0: number; z1: number }>; roads: Array<{ x0: number; x1: number; z0: number; z1: number }>; shoreX: number }) {
     this.size = canvas.width;
     this.ctx = canvas.getContext("2d")!;
     const extent = layout.half + ROAD_WIDTH / 2 + 40;
-    const px = Math.ceil(extent * 2 * SCALE);
+    const maxX = extras ? extras.maxX : extent;
+    const pw = Math.ceil((extent + maxX) * SCALE);
+    const ph = Math.ceil(extent * 2 * SCALE);
     this.base = document.createElement("canvas");
-    this.base.width = this.base.height = px;
+    this.base.width = pw;
+    this.base.height = ph;
     const g = this.base.getContext("2d")!;
+    const toX = (v: number) => (v + extent) * SCALE;
+    const toZ = (v: number) => (v + extent) * SCALE;
+    g.fillStyle = "#1d4660";
+    g.fillRect(0, 0, pw, ph);
     g.fillStyle = "#3f6a33";
-    g.fillRect(0, 0, px, px);
-    const toPx = (v: number) => (v + extent) * SCALE;
+    g.fillRect(0, 0, toX(extras ? extras.shoreX : extent), ph);
+    if (extras) {
+      g.fillStyle = "#5c6168";
+      for (const r of extras.land) g.fillRect(toX(r.x0), toZ(r.z0), (r.x1 - r.x0) * SCALE, (r.z1 - r.z0) * SCALE);
+    }
     g.fillStyle = "#2a2d33";
     for (let i = 0; i <= layout.n; i++) {
       const c = roadCoord(layout.n, i);
-      g.fillRect(toPx(-layout.half - ROAD_WIDTH / 2), toPx(c - ROAD_WIDTH / 2), (layout.half * 2 + ROAD_WIDTH) * SCALE, ROAD_WIDTH * SCALE);
-      g.fillRect(toPx(c - ROAD_WIDTH / 2), toPx(-layout.half - ROAD_WIDTH / 2), ROAD_WIDTH * SCALE, (layout.half * 2 + ROAD_WIDTH) * SCALE);
+      g.fillRect(toX(-layout.half - ROAD_WIDTH / 2), toZ(c - ROAD_WIDTH / 2), (layout.half * 2 + ROAD_WIDTH) * SCALE, ROAD_WIDTH * SCALE);
+      g.fillRect(toX(c - ROAD_WIDTH / 2), toZ(-layout.half - ROAD_WIDTH / 2), ROAD_WIDTH * SCALE, (layout.half * 2 + ROAD_WIDTH) * SCALE);
     }
+    if (extras) for (const r of extras.roads) g.fillRect(toX(r.x0), toZ(r.z0), (r.x1 - r.x0) * SCALE, (r.z1 - r.z0) * SCALE);
     for (const b of layout.buildings) {
-      g.fillStyle = b.kind === "tower" ? "#6d7f9c" : b.kind === "office" ? "#8e98a5" : "#a8927c";
-      g.fillRect(toPx(b.x - b.w / 2), toPx(b.z - b.d / 2), b.w * SCALE, b.d * SCALE);
+      g.fillStyle = b.kind === "tower" ? "#6d7f9c" : b.kind === "office" ? "#8e98a5" : b.kind === "container" ? "#b0795a" : b.kind === "rail" ? "#9aa3ad" : "#a8927c";
+      g.fillRect(toX(b.x - b.w / 2), toZ(b.z - b.d / 2), b.w * SCALE, b.d * SCALE);
     }
     this.extent = extent;
     void PITCH;

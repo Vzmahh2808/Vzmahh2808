@@ -1,5 +1,14 @@
 import { PITCH, roadCoord } from "../world/city";
 import type { Mission, Point } from "./missions";
+import { LIGHTHOUSE } from "../world/island";
+
+/** Fixed spots on the port island (roads there are not on the city grid). */
+export const ISLAND_SPOTS = {
+  contact: { x: 470, z: 0 },
+  docks: { x: 520, z: -108 },
+  lot: { x: 590, z: -3 },
+  cape: { x: LIGHTHOUSE.x - 8, z: 0 },
+};
 
 /** A point on the carriageway: intersection (ix, iz) nudged by (dx, dz) metres. */
 function road(n: number, ix: number, iz: number, dx = 0, dz = 0): Point {
@@ -63,8 +72,90 @@ export function raceMission(n: number): Mission {
   };
 }
 
-/** The story, played in order from the contact marker. */
+/** Both chapters in play order. */
 export function storyMissions(n: number): Mission[] {
+  return [...chapterOne(n), ...chapterTwo(n)];
+}
+
+export function chapterTwo(n: number): Mission[] {
+  const I = ISLAND_SPOTS;
+  const list: Mission[] = [
+    {
+      id: "ch2-bridge",
+      chapter: 2,
+      title: "Мост",
+      brief: "Глава 2. У Миры есть старый друг на острове, Лев, начальник порта. Переезжайте мост и найдите его у главной улицы.",
+      reward: 800,
+      time: 110,
+      steps: [{ kind: "goto", at: I.contact, radius: 8, vehicle: "any", text: "Переедьте мост и найдите Льва" }],
+    },
+    {
+      id: "ch2-container",
+      chapter: 2,
+      contact: I.contact,
+      title: "Контейнер №7",
+      brief: "В порту стоит фургон с грузом, который таможня считает своим. Отвезите его в городской гараж. Пост на мосту уже поднят по тревоге.",
+      reward: 2500,
+      time: 240,
+      spawns: { van: { kind: "van", color: 0x2c3e50, ...I.lot, heading: Math.PI, drives: false } },
+      protect: "van",
+      heatAfter: { 0: 3 },
+      steps: [
+        { kind: "enter", target: "van", text: "Сядьте в тёмный фургон у склада" },
+        { kind: "goto", at: places(n).garage, radius: 7, vehicle: "van", text: "Довезите фургон до гаража в городе" },
+      ],
+    },
+    {
+      id: "ch2-lighthouse",
+      chapter: 2,
+      contact: I.contact,
+      title: "Огонь маяка",
+      brief: "Лев проверяет водителей кругом по острову: мимо маяка, по всему кольцу и обратно к маяку.",
+      reward: 1500,
+      time: 75,
+      steps: [
+        {
+          kind: "race",
+          radius: 10,
+          text: "Круг по острову",
+          points: [I.cape, { x: 628, z: 108 }, { x: 412, z: 108 }, { x: 412, z: -108 }, { x: 628, z: -108 }, I.cape],
+        },
+      ],
+    },
+    {
+      id: "ch2-raid",
+      chapter: 2,
+      contact: I.contact,
+      title: "Облава",
+      brief: "Полиция готовит облаву на порт. Отвлеките её на себя: четыре звезды, а потом исчезните.",
+      reward: 3000,
+      time: 360,
+      steps: [
+        { kind: "stars", min: 4, text: "Получите четыре звезды" },
+        { kind: "evade", text: "Оторвитесь от полиции" },
+      ],
+    },
+    {
+      id: "ch2-finale",
+      chapter: 2,
+      contact: I.contact,
+      title: "Последний прилив",
+      brief: "Тот, кто сдал порт, уезжает с острова на серебристом спорткаре. Остановите его, вернитесь к маяку и заляжьте на дно.",
+      reward: 6000,
+      time: 300,
+      spawns: { traitor: { kind: "sport", color: 0xbdc3c7, ...I.docks, heading: 0, drives: true } },
+      steps: [
+        { kind: "destroy", target: "traitor", text: "Уничтожьте серебристый спорткар" },
+        { kind: "goto", at: I.cape, radius: 9, vehicle: "any", text: "Вернитесь к маяку" },
+        { kind: "evade", text: "Заляжьте на дно" },
+      ],
+    },
+  ];
+  return list;
+}
+
+/** Chapter one, played in order from the contact marker. */
+export function chapterOne(n: number): Mission[] {
   const c = n / 2;
   const edge = n;
   return [

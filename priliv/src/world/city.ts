@@ -18,7 +18,7 @@ export interface Building {
   d: number;
   h: number;
   color: number;
-  kind: "tower" | "office" | "house" | "shop";
+  kind: "tower" | "office" | "house" | "shop" | "warehouse" | "container" | "rail" | "crane" | "lighthouse";
 }
 
 export interface Tree {
@@ -52,7 +52,7 @@ export interface CityLayout {
   parking: Array<{ x: number; z: number; rot: number }>;
 }
 
-const PALETTES: Record<Building["kind"], number[]> = {
+const PALETTES: Record<"tower" | "office" | "house" | "shop", number[]> = {
   tower: [0x4a6fa5, 0x3b5a8a, 0x5c7fb8, 0x2f4a70, 0x6d8fc4],
   office: [0x8c9bab, 0x7a8797, 0xa4b0bd, 0x6c7886, 0xb7c2cc],
   house: [0xc98a5b, 0xb8744a, 0xd9a06f, 0x9c6a48, 0xe0b48a],
@@ -120,7 +120,7 @@ export function generateCity(rng: Rng, n = 8): CityLayout {
           const d = lotD - margin * 2 - rng.int(0, 3);
           const x = x0 + c * lotW + margin + (lotW - margin * 2 - w) / 2;
           const z = z0 + r * lotD + margin + (lotD - margin * 2 - d) / 2;
-          let kind: Building["kind"];
+          let kind: "tower" | "office" | "house" | "shop";
           let h: number;
           const central = 1 - distCentre;
           if (rng.next() < central * 0.7) {
