@@ -1,0 +1,66 @@
+name: pages
+
+on:
+  push:
+    paths: ["roguelike/**", "priliv/**", "site/**", ".github/workflows/pages.yml"]
+  pull_request:
+    paths: ["roguelike/**", "priliv/**", "site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        game: [roguelike, priliv]
+    defaults:
+      run:
+        working-directory: ${{ matrix.game }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.game }}/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.game }}
+          path: ${{ matrix.game }}/dist
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: site
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-roguelike
+          path: public/roguelike
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-priliv
+          path: public/priliv
+      - run: cp site/index.html public/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4

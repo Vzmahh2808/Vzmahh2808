@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Прилив</title>
+    <meta name="description" content="Открытый низкополигональный город в браузере: машины, трафик, погони. Three.js." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23141826'/%3E%3Crect x='6' y='14' width='20' height='8' rx='2' fill='%23ffd32a'/%3E%3Ccircle cx='10' cy='23' r='3' fill='%23eef1f6'/%3E%3Ccircle cx='22' cy='23' r='3' fill='%23eef1f6'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+      <div id="title" class="hud">Прилив</div>
+      <div id="stats" class="hud"></div>
+      <div id="health" class="hud"><div class="fill"></div></div>
+      <div id="speed" class="hud"><div class="num">0</div><div class="unit">КМ/Ч</div></div>
+      <div id="hint" class="hud"></div>
+      <canvas id="minimap" width="200" height="200"></canvas>
+      <div id="start">
+        <div class="card">
+          <h1>Прилив</h1>
+          <p>Открытый город. Гуляйте, угоняйте машины, гоняйте по проспектам. Это первый слой: полиция и миссии появятся дальше.</p>
+          <div class="keys">
+            <kbd>W A S D</kbd><span>Идти / рулить</span>
+            <kbd>Shift</kbd><span>Бежать</span>
+            <kbd>E</kbd><span>Сесть в машину / выйти</span>
+            <kbd>Пробел</kbd><span>Ручной тормоз</span>
+            <kbd>H</kbd><span>Сигнал</span>
+            <kbd>C</kbd><span>Сменить камеру</span>
+            <kbd>M</kbd><span>Звук</span>
+          </div>
+          <button id="btn-start">Начать</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
