@@ -804,6 +804,8 @@ const inside = { contact: false, race: false, garage: false, paint: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
+/** simTime of the last mission end; the garage and paint zones ignore that frame. */
+let missionEndedAt = -1e9;
 
 function nextStory(): Mission | undefined {
   return STORY.find((m) => !save.missionsDone.includes(m.id));
@@ -833,6 +835,7 @@ function startMission(m: Mission): void {
 }
 
 function endMission(): void {
+  missionEndedAt = simTime;
   for (const v of missionCars.values()) v.missionKey = null;
   missionCars.clear();
   objectiveText = "";
@@ -915,6 +918,11 @@ function updateMissions(dt: number): void {
     else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) startMission(RACE);
   }
 
+  // A mission that just ended in a zone must not also trigger it; wait until the player leaves.
+  if (simTime - missionEndedAt < 0.5) {
+    inside.garage = inside.garage || Math.hypot(player.x - PLACES.garage.x, player.z - PLACES.garage.z) < 6;
+    inside.paint = inside.paint || Math.hypot(player.x - PLACES.paint.x, player.z - PLACES.paint.z) < 6;
+  }
   if (v && entered("garage", PLACES.garage.x, PLACES.garage.z, 6, speedOf(v.state) < 3)) {
     if (v.police || v.missionKey) showBanner("Эту машину в гараж не поставить");
     else if (v.garaged) showBanner("Машина уже в гараже");

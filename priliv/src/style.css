@@ -63,3 +63,35 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 .start-buttons button.secondary { background: #1b2133; color: #eef1f6; border: 1px solid #2a3145; }
 .start-buttons button.danger { color: #ff8a8a; }
 .start-buttons button[hidden] { display: none; }
+/* Small screens: cards scroll instead of pushing buttons out of reach. */
+#start, #pause { padding: 16px; }
+#start .card, #pause .card { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; box-sizing: border-box; }
+@media (max-height: 480px) {
+  #start .card { padding: 16px 20px; }
+  #start h1 { font-size: 22px; }
+  #start p { margin: 4px 0; font-size: 13px; }
+  #start .keys { margin: 8px 0; font-size: 12.5px; gap: 3px 12px; }
+}
+/* Brief sits top-left so it never collides with the minimap or the hint bar. */
+#brief { left: 20px; top: 48px; bottom: auto; transform: none; width: min(400px, calc(100vw - 260px)); }
+#objective { max-width: min(560px, calc(100vw - 420px)); }
+@media (max-width: 700px) {
+  #brief { width: calc(100vw - 40px); }
+  #objective { max-width: calc(100vw - 40px); top: 110px; }
+  #goal-arrow { top: 150px; }
+}
+#brief { top: 104px; }
+@media (max-width: 700px) {
+  #minimap { width: 140px; height: 140px; right: 12px; bottom: 12px; }
+  #objective { top: 44px; font-size: 13px; }
+  #goal-arrow { top: 100px; }
+  #brief { top: auto; bottom: 170px; left: 12px; width: calc(100vw - 24px); }
+  #money { top: 64px; font-size: 18px; }
+  #wanted { font-size: 20px; }
+  #hint { bottom: 170px; font-size: 13px; }
+}
+@media (max-width: 700px) {
+  #hint { bottom: 162px; }
+  #brief { bottom: 206px; }
+  #goal-arrow { top: 122px; }
+}
