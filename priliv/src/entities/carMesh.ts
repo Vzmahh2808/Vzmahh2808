@@ -12,6 +12,9 @@ export interface CarVisual {
   brake: THREE.MeshStandardMaterial;
   head: THREE.MeshStandardMaterial;
   body: THREE.MeshStandardMaterial;
+  /** Police lightbar halves; absent on civilian cars. */
+  sirenRed?: THREE.MeshStandardMaterial;
+  sirenBlue?: THREE.MeshStandardMaterial;
 }
 
 const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 12);
@@ -106,7 +109,30 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
     if (x > 0) frontWheels.push(pivot);
   }
 
-  return { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake, head, body };
+  const visual: CarVisual = { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake, head, body };
+  if (kind === "police") {
+    const roofY = 0.45 + chassisH + cabH;
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0x1b3a8a, roughness: 0.5 });
+    for (const sgn of [-1, 1]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(L * 0.7, 0.18, 0.02), stripeMat);
+      stripe.position.set(0, 0.45 + chassisH * 0.55, sgn * (W / 2 + 0.01));
+      shell.add(stripe);
+    }
+    const hood = new THREE.Mesh(new THREE.BoxGeometry(L * 0.28, 0.02, W * 0.9), new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6 }));
+    hood.position.set(L * 0.36, 0.45 + chassisH + 0.01, 0);
+    shell.add(hood);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.1, W * 0.75), new THREE.MeshStandardMaterial({ color: 0x222428 }));
+    base.position.set(cabX, roofY + 0.05, 0);
+    shell.add(base);
+    visual.sirenRed = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.1 });
+    visual.sirenBlue = new THREE.MeshStandardMaterial({ color: 0x000055, emissive: 0x2a5bff, emissiveIntensity: 0.1 });
+    const red = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenRed);
+    red.position.set(cabX, roofY + 0.18, -W * 0.19);
+    const blue = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenBlue);
+    blue.position.set(cabX, roofY + 0.18, W * 0.19);
+    shell.add(red, blue);
+  }
+  return visual;
 }
 
 const CHAR = new THREE.Color(0x1d1b1a);
@@ -130,4 +156,17 @@ export function syncCarVisual(v: CarVisual, c: CarState, braking: boolean, groun
   v.shell.rotation.x = sag * 0.05;
   v.shell.rotation.z = sag * -0.03;
   v.shell.position.y = c.wrecked ? -0.18 : -sag * 0.08;
+}
+
+/** Alternate the lightbar; `on` false leaves it dim. */
+export function flashSiren(v: CarVisual, on: boolean, time: number): void {
+  if (!v.sirenRed || !v.sirenBlue) return;
+  if (!on) {
+    v.sirenRed.emissiveIntensity = 0.1;
+    v.sirenBlue.emissiveIntensity = 0.1;
+    return;
+  }
+  const phase = Math.floor(time * 7) % 4;
+  v.sirenRed.emissiveIntensity = phase < 2 ? 3 : 0.1;
+  v.sirenBlue.emissiveIntensity = phase < 2 ? 0.1 : 3;
 }
