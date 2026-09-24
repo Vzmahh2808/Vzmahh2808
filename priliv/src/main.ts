@@ -32,7 +32,7 @@ import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
 import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
-import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, isBoatWater, routeOnWater, type Dock } from "./world/water";
+import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
 
@@ -159,6 +159,13 @@ interface Boat {
   /** Police boats steer for this waypoint, refreshed a few times a second. */
   aim: { x: number; z: number };
   aimTimer: number;
+  /** Key of the mission this boat belongs to, while that mission runs. */
+  missionKey: string | null;
+  /** Mission boats sail this route when nobody is at the helm. */
+  route: { x: number; z: number }[] | null;
+  follower: RouteFollower | null;
+  /** Spawned for a mission: removed once the player has left it far behind. */
+  temporary: boolean;
 }
 
 const boats: Boat[] = [];
@@ -170,7 +177,21 @@ function addBoat(kind: string, color: number, x: number, z: number, heading: num
   const spec = BOAT_SPECS[kind];
   const visual = buildBoatVisual(kind, spec, color);
   scene.add(visual.group);
-  const b: Boat = { state: makeBoat(x, z, heading), kind, visual, input: { throttle: 0, steer: 0 }, police, dock, radius: spec.length * 0.42, aim: { x, z }, aimTimer: 0 };
+  const b: Boat = {
+    state: makeBoat(x, z, heading),
+    kind,
+    visual,
+    input: { throttle: 0, steer: 0 },
+    police,
+    dock,
+    radius: spec.length * 0.42,
+    aim: { x, z },
+    aimTimer: 0,
+    missionKey: null,
+    route: null,
+    follower: null,
+    temporary: false,
+  };
   boats.push(b);
   return b;
 }
@@ -879,7 +900,7 @@ function nearestBoat(): Boat | null {
   let best: Boat | null = null;
   let bestD = 5.5;
   for (const b of boats) {
-    if (b.state.sunk || b.police) continue;
+    if (b.state.sunk || b.police || b.route) continue;
     const d = Math.hypot(b.state.x - player.x, b.state.z - player.z);
     if (d < bestD) {
       bestD = d;
@@ -1072,6 +1093,7 @@ const RACE = raceMission(layout.n);
 const REGATTA_M = regattaMission();
 const runner = new MissionRunner();
 const missionCars = new Map<string, Vehicle>();
+const missionBoats = new Map<string, Boat>();
 const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4);
 const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5);
 const regattaMarker = new ZoneMarker(scene, 0x00d2d3, "Л", 7);
@@ -1122,6 +1144,20 @@ function startMission(m: Mission): void {
     v.missionKey = key;
     missionCars.set(key, v);
   }
+  for (const [key, spec] of Object.entries(m.boats ?? {})) {
+    const b = addBoat(spec.kind, spec.color, spec.x, spec.z, spec.heading, null);
+    b.missionKey = key;
+    b.temporary = true;
+    if (spec.health) b.state.health = spec.health;
+    if (spec.route) {
+      b.route = spec.route;
+      // Start towards the waypoint after the one the boat spawns on.
+      const at = spec.route.findIndex((p) => Math.hypot(p.x - spec.x, p.z - spec.z) < 1);
+      b.follower = { index: (at + 1) % spec.route.length, aim: { x: spec.x, z: spec.z }, aimTimer: 0 };
+    }
+    missionBoats.set(key, b);
+  }
+  if (m.weather) weather.set(m.weather);
   if (m.chapterTitle) setTimeout(() => showBanner(m.chapterTitle!), 200);
   $("#brief-title").textContent = m.title;
   $("#brief-text").textContent = m.brief;
@@ -1133,6 +1169,12 @@ function endMission(): void {
   missionEndedAt = simTime;
   for (const v of missionCars.values()) v.missionKey = null;
   missionCars.clear();
+  for (const b of missionBoats.values()) {
+    b.missionKey = null;
+    b.route = null;
+    b.follower = null;
+  }
+  missionBoats.clear();
   objectiveText = "";
   goalMarker.hide();
   holdMarker.hide();
@@ -1255,12 +1297,16 @@ function updateMissions(dt: number): void {
       if (mv.state.burning || mv.state.wrecked) destroyed.add(key);
       positions[key] = { x: mv.state.x, z: mv.state.z };
     }
+    for (const [key, b] of missionBoats) {
+      if (b.state.sunk) destroyed.add(key);
+      positions[key] = { x: b.state.x, z: b.state.z };
+    }
     handleMissionEvents(
       runner.update(
         {
           x: player.x,
           z: player.z,
-          vehicle: v ? v.missionKey ?? "any" : player.boat ? "boat" : null,
+          vehicle: v ? v.missionKey ?? "any" : player.boat ? player.boat.missionKey ?? "boat" : null,
           stars: wanted.level,
           speed: v ? speedOf(v.state) : player.boat ? boatSpeed(player.boat.state) : player.speed,
           destroyed,
@@ -1274,13 +1320,14 @@ function updateMissions(dt: number): void {
     const at = story?.contact ?? PLACES.contact;
     if (story && entered("contact", at.x, at.z, 5, slow)) startMission(story);
     else if (entered("race", PLACES.race.x, PLACES.race.z, 6, !!v && slow)) openRaceMenu();
-    else if (entered("regatta", MARINA.x, MARINA.z, 8, !!player.boat && boatSpeed(player.boat.state) < 6)) startMission(REGATTA_M);
+    else if (entered("regatta", MARINA.x, MARINA.z, 8, !!player.boat && boatSpeed(player.boat.state) < 6)) openRegattaMenu();
   }
 
   // A mission that just ended in a zone must not also trigger it; wait until the player leaves.
   if (simTime - missionEndedAt < 0.5) {
     inside.garage = inside.garage || Math.hypot(player.x - PLACES.garage.x, player.z - PLACES.garage.z) < 6;
     inside.paint = inside.paint || Math.hypot(player.x - PLACES.paint.x, player.z - PLACES.paint.z) < 6;
+    inside.regatta = inside.regatta || Math.hypot(player.x - MARINA.x, player.z - MARINA.z) < 8;
   }
   if (v && entered("garage", PLACES.garage.x, PLACES.garage.z, 6, speedOf(v.state) < 3)) {
     if (v.police || v.missionKey) showBanner("Эту машину в гараж не поставить");
@@ -1461,7 +1508,10 @@ function openWorkshop(v: Vehicle): void {
 
 function syncMissionVisuals(dt: number): void {
   const story = nextStory();
-  if (!runner.active && story) contactMarker.show((story.contact ?? PLACES.contact).x, (story.contact ?? PLACES.contact).z);
+  if (!runner.active && story) {
+    const c = story.contact ?? PLACES.contact;
+    contactMarker.show(c.x, c.z, land(c.x, c.z) === "pier" ? PIER_TOP - 0.2 : 0);
+  }
   else contactMarker.hide();
   if (!runner.active) raceMarker.show(PLACES.race.x, PLACES.race.z);
   else raceMarker.hide();
@@ -1490,8 +1540,10 @@ function syncMissionVisuals(dt: number): void {
   }
   if (step && (step.kind === "enter" || step.kind === "destroy" || step.kind === "tail")) {
     const mv = missionCars.get(step.target);
+    const mb = missionBoats.get(step.target);
     const color = step.kind === "destroy" ? 0xff4d6d : step.kind === "tail" ? 0x74b9ff : 0x7bed9f;
     if (mv && mv !== player.vehicle) targetArrow.show(mv.state.x, mv.state.z, color, dt);
+    else if (mb && mb !== player.boat && !mb.state.sunk) targetArrow.show(mb.state.x, mb.state.z, color, dt);
   }
   for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
 }
@@ -1519,6 +1571,20 @@ interface StreetRace {
 let street: StreetRace | null = null;
 /** Rival cars left on the road after a race, removed once out of sight. */
 const leftoverRivals: Vehicle[] = [];
+
+/** Boats come and go past the marina all the time, so the regatta asks before it starts. */
+function openRegattaMenu(): void {
+  openMenu("Пристань", [
+    {
+      label: "Регата",
+      note: `вокруг маяка к мосту, рекорд ${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "не установлен"}`,
+      action: () => {
+        closeMenu();
+        if (player.boat && !runner.active) startMission(REGATTA_M);
+      },
+    },
+  ]);
+}
 
 function openRaceMenu(): void {
   const v = player.vehicle;
@@ -1670,6 +1736,10 @@ function stepBoats(dt: number, now: number): void {
         // Straight at the player when in sight, else via the waterway nodes.
         b.input = chaseBoat(s, b.aim === target ? target : { x: b.aim.x, z: b.aim.z, vx: 0, vz: 0 }, onWater);
       } else b.input = { throttle: 0, steer: 0 };
+    } else if (b.route && b.follower && b !== player.boat && !s.sunk) {
+      // A fugitive opens the throttle when the player closes in.
+      const near = Math.hypot(s.x - player.x, s.z - player.z) < 45;
+      b.input = followRoute(s, b.route, b.follower, near ? 1 : 0.8, onWater, dt);
     } else if (b !== player.boat) {
       b.input.throttle = 0;
       b.input.steer = 0;
@@ -1750,6 +1820,13 @@ function stepBoats(dt: number, now: number): void {
   dockTimer -= dt;
   if (dockTimer <= 0) {
     dockTimer = 2;
+    for (let i = boats.length - 1; i >= 0; i--) {
+      const b = boats[i];
+      if (b.temporary && !b.missionKey && b !== player.boat && Math.hypot(b.state.x - player.x, b.state.z - player.z) > 120) {
+        scene.remove(b.visual.group);
+        boats.splice(i, 1);
+      }
+    }
     for (const b of boats) {
       const d = b.dock;
       if (!d || b === player.boat) continue;
@@ -2289,6 +2366,7 @@ function updateHud(): void {
   arrowEl.style.top = g ? `${Math.round(objectiveEl.getBoundingClientRect().bottom + 4)}px` : "";
   const targets: Record<string, { x: number; z: number }> = {};
   for (const [key, mv] of missionCars) targets[key] = { x: mv.state.x, z: mv.state.z };
+  for (const [key, b] of missionBoats) targets[key] = { x: b.state.x, z: b.state.z };
   const goal = runner.active ? runner.objective(targets, player) : null;
   if (goal) {
     const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
@@ -2315,7 +2393,7 @@ function updateHud(): void {
   for (const c of cops) dots.push({ x: c.ped.x, z: c.ped.z, color: "#3b7bff" });
   for (const b of boats) {
     if (b.state.sunk) continue;
-    dots.push({ x: b.state.x, z: b.state.z, color: b === player.boat ? "#ffd32a" : b.police ? (blink ? "#ff3b3b" : "#3b7bff") : "#81ecec" });
+    dots.push({ x: b.state.x, z: b.state.z, color: b === player.boat ? "#ffd32a" : b.police ? (blink ? "#ff3b3b" : "#3b7bff") : b.missionKey ? "#ff7675" : "#81ecec" });
   }
   if (heli.active) dots.push({ x: heli.x, z: heli.z, color: blink ? "#ff3b3b" : "#ffffff" });
   const icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [
@@ -2411,6 +2489,7 @@ if (location.search.includes("debug")) {
     places: PLACES,
     missionCars,
     boats,
+    missionBoats,
     policeBoat: () => policeBoat,
     street: () => street,
     startStreetRace: (i: number) => player.vehicle && startStreetRace(TRACKS[i], player.vehicle),

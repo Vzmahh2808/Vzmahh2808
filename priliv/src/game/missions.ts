@@ -15,6 +15,18 @@ export interface SpawnSpec {
   drives: boolean;
 }
 
+/** A boat a mission puts on the water; with a route it sails it, fleeing from the player. */
+export interface BoatSpawnSpec {
+  kind: string;
+  color: number;
+  x: number;
+  z: number;
+  heading: number;
+  route?: Point[];
+  /** Hull strength; weaker boats sink after fewer rams. */
+  health?: number;
+}
+
 export type Step =
   | { kind: "goto"; at: Point; radius: number; vehicle?: "any" | "none" | string; stop?: boolean; text: string }
   | { kind: "enter"; target: string; text: string }
@@ -64,12 +76,16 @@ export interface Mission {
   chapter?: number;
   /** Banner shown when this mission opens a new chapter. */
   chapterTitle?: string;
+  /** Boats spawned for the mission; steps refer to them by key like cars. */
+  boats?: Record<string, BoatSpawnSpec>;
+  /** Weather forced on when the mission starts. */
+  weather?: "clear" | "cloudy" | "rain" | "storm";
 }
 
 export interface MissionContext {
   x: number;
   z: number;
-  /** Key of the mission vehicle the player is in, "any" for another car, or null on foot. */
+  /** Key of the mission vehicle the player is in, "any" for another car, "boat" for another boat, or null on foot. */
   vehicle: string | null;
   stars: number;
   /** Player's current speed in m/s (on foot or in a car). */
