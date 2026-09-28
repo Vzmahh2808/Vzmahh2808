@@ -1,4 +1,4 @@
-export type Crime = "hitPed" | "carjack" | "stealCop" | "ramCop" | "hitCop" | "explosion" | "killCop";
+export type Crime = "hitPed" | "carjack" | "stealCop" | "ramCop" | "hitCop" | "explosion" | "killCop" | "shooting" | "shootPed";
 
 export const CRIME_HEAT: Record<Crime, number> = {
   hitPed: 1,
@@ -8,6 +8,8 @@ export const CRIME_HEAT: Record<Crime, number> = {
   hitCop: 5,
   explosion: 5,
   killCop: 12,
+  shooting: 1,
+  shootPed: 3,
 };
 
 /** Heat needed for 1..5 stars. */

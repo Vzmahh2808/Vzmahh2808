@@ -13,6 +13,15 @@ export class Input {
       if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(ev.code)) ev.preventDefault();
     });
     target.addEventListener("keyup", (ev) => this.down.delete(ev.code));
+    // The left mouse button fires; it arrives as the pseudo key "Mouse0".
+    target.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0 || (ev.target instanceof HTMLElement && ev.target.closest("button, #menu, #pause, #start"))) return;
+      this.down.add("Mouse0");
+      this.pressed.add("Mouse0");
+    });
+    target.addEventListener("mouseup", (ev) => {
+      if (ev.button === 0) this.down.delete("Mouse0");
+    });
     target.addEventListener("blur", () => this.down.clear());
   }
 

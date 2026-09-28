@@ -228,6 +228,28 @@ export class CarAudio {
     this.hornGain.gain.setTargetAtTime(on && !this.muted ? 0.15 : 0, this.ctx.currentTime, 0.01);
   }
 
+  /** A sharp crack with a short low tail, quieter with distance. */
+  gunshot(distance: number): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const vol = 0.35 * Math.max(0, 1 - distance / 160);
+    if (vol < 0.01) return;
+    const ctx = this.ctx;
+    const len = Math.floor(ctx.sampleRate * 0.18);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const f = ctx.createBiquadFilter();
+    f.type = "bandpass";
+    f.frequency.value = 1400 - Math.min(900, distance * 8);
+    f.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.value = vol;
+    src.connect(f).connect(g).connect(this.master);
+    src.start();
+  }
+
   crash(intensity: number): void {
     if (!this.ctx || !this.master || this.muted) return;
     const ctx = this.ctx;
