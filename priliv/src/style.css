@@ -166,3 +166,12 @@ body.touch #touch.in-car.taxi .job { display: block; }
 #objective.warn .gauge { animation: gauge-warn 0.5s infinite alternate; }
 #objective.warn .gauge i { background: linear-gradient(90deg, #ff6b6b, #feca57); }
 @keyframes gauge-warn { from { box-shadow: 0 0 0 0 rgba(255,107,107,0.0); } to { box-shadow: 0 0 0 2px rgba(255,107,107,0.9); } }
+
+/* Gun in hand: name and rounds. */
+#weapon { left: 20px; bottom: 112px; font: 600 14px var(--mono); color: #eef1f6; background: rgba(10,12,18,0.6); padding: 5px 10px; border-radius: 6px; display: none; }
+#weapon.show { display: block; }
+#weapon.empty { color: #ff6b6b; }
+body.touch #weapon { left: 132px; top: 88px; bottom: auto; font-size: 12px; }
+body.touch #hint { top: 116px; }
+body.touch #touch .gun { display: none; }
+body.touch #touch.armed:not(.in-car) .gun { display: block; background: rgba(225,112,85,0.85); border-color: transparent; }

@@ -1,4 +1,5 @@
 import { RAID_EVERY, freshHoldings, type Holdings } from "./business";
+import { WEAPONS } from "./weapons";
 
 export const SAVE_KEY = "priliv.save";
 export const SAVE_VERSION = 1;
@@ -30,6 +31,8 @@ export interface SaveData {
   business: Holdings;
   /** Unique stunt jumps cleared, and the best score of any jump. */
   stunts: { done: string[]; best: number };
+  /** Guns bought, rounds carried for each, and the one in hand. */
+  weapons: { owned: string[]; ammo: Record<string, number>; selected: string | null };
 }
 
 export interface KeyValueStore {
@@ -53,7 +56,23 @@ export function freshSave(): SaveData {
     stats: { missions: 0, arrests: 0, deaths: 0, carsDestroyed: 0, racesWon: 0 },
     business: freshHoldings(),
     stunts: { done: [], best: 0 },
+    weapons: { owned: [], ammo: {}, selected: null },
   };
+}
+
+function parseWeapons(raw: unknown): SaveData["weapons"] {
+  const w: SaveData["weapons"] = { owned: [], ammo: {}, selected: null };
+  if (!raw || typeof raw !== "object") return w;
+  const data = raw as { owned?: unknown; ammo?: unknown; selected?: unknown };
+  if (Array.isArray(data.owned)) w.owned = [...new Set(data.owned.filter((id): id is string => typeof id === "string" && id in WEAPONS))];
+  if (data.ammo && typeof data.ammo === "object") {
+    for (const id of w.owned) {
+      const n = (data.ammo as Record<string, unknown>)[id];
+      w.ammo[id] = typeof n === "number" && n > 0 ? Math.floor(n) : 0;
+    }
+  }
+  if (typeof data.selected === "string" && w.owned.includes(data.selected)) w.selected = data.selected;
+  return w;
 }
 
 function parseHoldings(raw: unknown): Holdings {
@@ -121,6 +140,7 @@ export function parseSave(raw: string | null): SaveData | null {
       racesWon: num(data.stats?.racesWon, 0),
     },
     business: parseHoldings(data.business),
+    weapons: parseWeapons(data.weapons),
     stunts: {
       done: Array.isArray(data.stunts?.done) ? [...new Set(data.stunts.done.filter((d): d is string => typeof d === "string"))] : [],
       best: Math.max(0, Math.floor(num(data.stunts?.best, 0))),

@@ -37,6 +37,7 @@ import { ALL_STUNTS_BONUS, RAMPS, STUNT_REWARD, describeJump, finishJump, isClea
 import { buildRamps } from "./world/rampMesh";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
 import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
+import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapons";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -298,7 +299,21 @@ const copLight = new THREE.PointLight(0xff2020, 0, 40, 1.6);
 scene.add(copLight);
 const WEATHER_ICON: Record<WeatherKind, string> = { clear: "☀", cloudy: "☁", rain: "🌧", storm: "⛈" };
 
+// ---------------------------------------------------------------- weapons
+
+/** Guns the player owns, loaded from the save; the one in hand is `weaponId`. */
+const guns: Record<string, Gun> = {};
+for (const id of save.weapons.owned) guns[id] = new Gun(WEAPONS[id], save.weapons.ammo[id] ?? 0);
+let weaponId: string | null = save.weapons.selected;
+
+function syncWeaponSave(): void {
+  save.weapons.owned = WEAPON_ORDER.filter((id) => guns[id]);
+  save.weapons.ammo = Object.fromEntries(save.weapons.owned.map((id) => [id, guns[id].total]));
+  save.weapons.selected = weaponId;
+}
+
 function persist(): void {
+  syncWeaponSave();
   save.clock = wrapHour(clock);
   writeSave(save);
 }
@@ -386,6 +401,9 @@ interface Cop {
   ped: Ped;
   vis: PedVisual;
   leaving: boolean;
+  hp: number;
+  /** Seconds until this cop may fire again. */
+  shootTimer: number;
 }
 const cops: Cop[] = [];
 
@@ -395,7 +413,7 @@ function spawnCop(x: number, z: number): void {
   vis.group.traverse((o) => (o.castShadow = false));
   scene.add(vis.group);
   const ped: Ped = { id: -1, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading: 0, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0 };
-  cops.push({ ped, vis, leaving: false });
+  cops.push({ ped, vis, leaving: false, hp: 100, shootTimer: 1.5 });
 }
 
 function removeCop(i: number): void {
@@ -590,7 +608,9 @@ function stepCops(dt: number): void {
     const away = c.leaving || player.dead > 0;
     const ang = away ? Math.atan2(p.z - player.z, p.x - player.x) : Math.atan2(player.z - p.z, player.x - p.x);
     p.heading = ang;
-    const target = away ? 3 : d < 1.1 ? 0 : 6.4;
+    // On three stars and up a cop with a clear line stops to shoot instead of running in.
+    const shooting = !away && copShoot(c, d, dt);
+    const target = away ? 3 : d < 1.1 || (shooting && d < 14) ? 0 : 6.4;
     p.speed += (target - p.speed) * Math.min(1, dt * 6);
     const ox = p.x;
     const oz = p.z;
@@ -688,6 +708,11 @@ function recyclePeds(budget: number, minD = PED_NEAR): void {
 
 const playerVis = buildPedestrian(0x2e86de, 0x2d3436);
 scene.add(playerVis.group);
+/** The gun in the player's right hand, along the arm so it points ahead when the arm is raised. */
+const gunMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.12), new THREE.MeshStandardMaterial({ color: 0x1d1f24, roughness: 0.5, metalness: 0.6 }));
+gunMesh.position.set(0, -0.68, 0.04);
+gunMesh.visible = false;
+playerVis.armR.add(gunMesh);
 const player = { x: 0, z: 0, heading: 0, speed: 0, vehicle: null as Vehicle | null, boat: null as Boat | null, health: 100, dead: 0 };
 
 /** Home is the sidewalk outside the garage. */
@@ -724,6 +749,7 @@ const objectiveEl = $<HTMLDivElement>("#objective");
 const arrowEl = $<HTMLDivElement>("#goal-arrow");
 const briefEl = $<HTMLDivElement>("#brief");
 const clockEl = $<HTMLDivElement>("#clock");
+const weaponEl = $<HTMLDivElement>("#weapon");
 let cameraMode = 0;
 let started = false;
 let paused = true;
@@ -1019,8 +1045,14 @@ function arrestPlayer(): void {
   const fine = Math.min(save.money, Math.max(50, Math.round(save.money * 0.1)));
   save.money -= fine;
   save.stats.arrests++;
+  // Guns go to the evidence room.
+  const armed = Object.keys(guns).length > 0;
+  for (const id of Object.keys(guns)) delete guns[id];
+  weaponId = null;
   persist();
-  showOverlay("Задержаны", `Штраф $${fine}. Розыск снят, ${player.boat ? "катер конфискован" : "машина конфискована"}.`);
+  const taken = player.boat ? "катер конфискован" : player.vehicle ? "машина конфискована" : "";
+  const lost = [taken, armed ? "оружие изъято" : ""].filter(Boolean).join(", ");
+  showOverlay("Задержаны", `Штраф $${fine}. Розыск снят${lost ? ", " + lost : ""}.`);
 }
 
 function respawnPlayer(): void {
@@ -1101,6 +1133,235 @@ function explode(x: number, z: number, source: Vehicle | null): void {
   }
 }
 
+// ---------------------------------------------------------------- gunfire
+
+/** Short-lived bright lines from muzzle to impact. */
+const tracers = Array.from({ length: 16 }, () => {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
+  const mat = new THREE.LineBasicMaterial({ color: 0xffe8a0, transparent: true, opacity: 0, depthWrite: false });
+  const line = new THREE.Line(geo, mat);
+  line.frustumCulled = false;
+  scene.add(line);
+  return { line, mat, ttl: 0 };
+});
+let tracerNext = 0;
+
+function tracer(ax: number, ay: number, az: number, bx: number, by: number, bz: number, color = 0xffe8a0): void {
+  const t = tracers[tracerNext];
+  tracerNext = (tracerNext + 1) % tracers.length;
+  const pos = t.line.geometry.getAttribute("position") as THREE.BufferAttribute;
+  pos.setXYZ(0, ax, ay, az);
+  pos.setXYZ(1, bx, by, bz);
+  pos.needsUpdate = true;
+  t.mat.color.setHex(color);
+  t.ttl = 0.09;
+}
+
+function fadeTracers(dt: number): void {
+  for (const t of tracers) {
+    t.ttl = Math.max(0, t.ttl - dt);
+    t.mat.opacity = t.ttl > 0 ? 0.9 : 0;
+  }
+}
+
+function muzzleFlash(x: number, y: number, z: number): void {
+  for (let i = 0; i < 3; i++) fire.emit({ x, y, z, spread: 0.15, life: 0.07, size0: 0.35, size1: 0.1, color: 0xfff3b0, color1: 0xff9a2a });
+}
+
+/** Where a shot from (ox, oz) along `ang` stops: the first wall, or the end of its range. */
+function shotEnd(ox: number, oz: number, ang: number, range: number): { x: number; z: number } {
+  const cx = Math.cos(ang);
+  const cz = Math.sin(ang);
+  for (let d = 1; d <= range; d += 1) {
+    const x = ox + cx * d;
+    const z = oz + cz * d;
+    if (resolveCircleVsBuildings(layout, x, z, 0.05)) return { x, z };
+  }
+  return { x: ox + cx * range, z: oz + cz * range };
+}
+
+/** People have 100 health; a ped is only tracked here once shot. */
+const pedHp = new WeakMap<Ped, number>();
+/** Shooting is heard; only every so often does it add to the wanted level. */
+let lastShotCrime = -1e9;
+/** simTime of the player's last shot, to keep the gun arm raised. */
+let lastShot = -1e9;
+
+interface ShotTarget {
+  id: number;
+  x: number;
+  z: number;
+  ped?: Ped;
+  cop?: Cop;
+  car?: Vehicle;
+}
+
+function fireShot(gun: Gun): void {
+  const spec = gun.spec;
+  const ox = player.x;
+  const oz = player.z;
+  const near = (x: number, z: number) => Math.abs(x - ox) < spec.range && Math.abs(z - oz) < spec.range;
+  const cands: ShotTarget[] = [];
+  let id = 0;
+  for (const c of cops) if (c.ped.state !== "down" && c.ped.state !== "gone" && near(c.ped.x, c.ped.z)) cands.push({ id: id++, x: c.ped.x, z: c.ped.z, cop: c });
+  for (const p of peds) if (p.state !== "down" && p.state !== "gone" && near(p.x, p.z)) cands.push({ id: id++, x: p.x, z: p.z, ped: p });
+  for (const v of vehicles) if (!v.state.wrecked && near(v.state.x, v.state.z)) cands.push({ id: id++, x: v.state.x, z: v.state.z, car: v });
+  const t = pickTarget(ox, oz, player.heading, cands, spec.range, spec.cone, (x, z) => lineOfSight(layout, ox, oz, x, z));
+  // Auto-aim turns the shooter to the target.
+  if (t) player.heading = Math.atan2(t.z - oz, t.x - ox);
+  const gy = ground(ox, oz) + 1.35;
+  const mx = ox + Math.cos(player.heading) * 0.75;
+  const mz = oz + Math.sin(player.heading) * 0.75;
+  muzzleFlash(mx, gy, mz);
+  flash.position.set(mx, gy, mz);
+  flash.intensity = Math.max(flash.intensity, 60);
+  audio.gunshot(0);
+  lastShot = simTime;
+  const d = t ? Math.hypot(t.x - ox, t.z - oz) : 0;
+  const hit = !!t && rng.chance(hitChance(d, spec.range));
+  if (t && hit) {
+    tracer(mx, gy, mz, t.x, ground(t.x, t.z) + (t.car ? 0.9 : 1.2), t.z);
+    const dx = (t.x - ox) / (d || 1);
+    const dz = (t.z - oz) / (d || 1);
+    if (t.ped) {
+      const hp = (pedHp.get(t.ped) ?? 100) - spec.damage;
+      pedHp.set(t.ped, hp);
+      if (hp <= 0) {
+        knockPed(t.ped, dx * 3, dz * 3);
+        pedHp.delete(t.ped);
+        crime("shootPed", t.x, t.z, false);
+      } else scare(t.ped, { x: ox, z: oz }, 6);
+    } else if (t.cop) {
+      t.cop.hp -= spec.damage;
+      if (t.cop.hp <= 0) {
+        knockPed(t.cop.ped, dx * 3, dz * 3);
+        crime("killCop", t.x, t.z, false);
+      } else crime("hitCop", t.x, t.z, false);
+    } else if (t.car) {
+      const s = t.car.state;
+      s.health = Math.max(0, s.health - spec.carDamage * armorFactor(t.car.mods));
+      t.car.blame = simTime;
+      if (t.car.ai) t.car.ai.stunned = Math.max(t.car.ai.stunned, 0.6);
+      if (t.car.police && isActivePolice(t.car)) crime("hitCop", t.x, t.z, false);
+      if (Math.random() < 0.5) fire.emit({ x: t.x - dx * 1.2, y: 0.9, z: t.z - dz * 1.2, spread: 0.3, life: 0.2, size0: 0.25, size1: 0.05, color: 0xffe08a, color1: 0xff6a00, gravity: 12 });
+    }
+  } else {
+    // A miss: off to the side of the target, or straight ahead into whatever is there.
+    const ang = t ? Math.atan2(t.z - oz, t.x - ox) + (rng.next() - 0.5) * 0.12 : player.heading;
+    const end = shotEnd(ox, oz, ang, spec.range);
+    tracer(mx, gy, mz, end.x, gy - 0.2, end.z);
+  }
+  for (const p of peds) if (p.state !== "down" && p.state !== "gone" && Math.abs(p.x - ox) < 35 && Math.abs(p.z - oz) < 35) scare(p, { x: ox, z: oz }, 6);
+  if (simTime - lastShotCrime > 4) {
+    lastShotCrime = simTime;
+    crime("shooting", ox, oz, true);
+  }
+}
+
+/** The gun in hand, if the player holds one. */
+function heldGun(): Gun | null {
+  return weaponId ? guns[weaponId] ?? null : null;
+}
+
+function cycleWeapon(): void {
+  const list: Array<string | null> = [null, ...WEAPON_ORDER.filter((id) => guns[id])];
+  if (list.length === 1) {
+    showBanner("Оружия нет. Купите в лавке «Калибр» (О на карте)");
+    return;
+  }
+  weaponId = list[(list.indexOf(weaponId) + 1) % list.length];
+  showBanner(weaponId ? WEAPONS[weaponId].name : "Оружие убрано");
+}
+
+/** Walking with a gun: hold fire to shoot, R to reload. */
+function stepPlayerGun(dt: number): void {
+  const gun = heldGun();
+  for (const g of Object.values(guns)) if (g !== gun) g.update(dt, false);
+  if (!gun) return;
+  if (input.justPressed("KeyR") && gun.startReload()) showBanner("Перезарядка…");
+  const trigger = input.isDown("Mouse0", "KeyX");
+  if (trigger && gun.total === 0 && input.justPressed("Mouse0", "KeyX")) {
+    audio.alert();
+    showBanner("Нет патронов. Купите в лавке «Калибр»");
+  }
+  const shots = gun.update(dt, trigger);
+  for (let i = 0; i < shots; i++) fireShot(gun);
+}
+
+/** A cop on foot with a clear line fires at the player on three stars and up. */
+function copShoot(c: Cop, d: number, dt: number): boolean {
+  if (wanted.level < 3 || player.dead > 0 || player.boat || d > 24) return false;
+  const p = c.ped;
+  if (!lineOfSight(layout, p.x, p.z, player.x, player.z)) return false;
+  c.shootTimer -= dt;
+  if (c.shootTimer > 0) return true;
+  c.shootTimer = 0.9 + rng.next() * 0.7;
+  const gy = ground(p.x, p.z) + 1.35;
+  const mx = p.x + Math.cos(p.heading) * 0.7;
+  const mz = p.z + Math.sin(p.heading) * 0.7;
+  muzzleFlash(mx, gy, mz);
+  audio.gunshot(d);
+  if (rng.chance(hitChance(d, 30) * 0.6)) {
+    tracer(mx, gy, mz, player.x, ground(player.x, player.z) + (player.vehicle ? 0.9 : 1.2), player.z, 0xffb0a0);
+    if (player.vehicle) player.vehicle.state.health = Math.max(0, player.vehicle.state.health - 3 * armorFactor(player.vehicle.mods));
+    else {
+      player.health -= 8;
+      shake = Math.max(shake, 0.25);
+      if (player.health <= 0) killPlayer("Вас застрелили");
+    }
+  } else {
+    const ang = Math.atan2(player.z - p.z, player.x - p.x) + (rng.next() - 0.5) * 0.25;
+    const end = shotEnd(p.x, p.z, ang, 30);
+    tracer(mx, gy, mz, end.x, gy - 0.3, end.z, 0xffb0a0);
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------- gun shop
+
+const gunShopMarker = new ZoneMarker(scene, 0xe17055, "О", 4);
+gunShopMarker.show(PLACES.gunShop.x, PLACES.gunShop.z);
+
+function openGunShop(): void {
+  const items: MenuItem[] = [];
+  for (const id of WEAPON_ORDER) {
+    const w = WEAPONS[id];
+    const g = guns[id];
+    if (!g) {
+      items.push({
+        label: w.name,
+        note: `${w.rate} выстр./с · магазин ${w.magazine} · в комплекте 3 магазина`,
+        price: w.price,
+        action: () => {
+          if (save.money < w.price || guns[id]) return;
+          addMoney(-w.price);
+          guns[id] = new Gun(w, w.magazine * 3);
+          weaponId = id;
+          persist();
+          openGunShop();
+          audio.alert();
+          showBanner(`Куплено: ${w.name}. ${k("Огонь — ЛКМ или X, Q — сменить", "Жмите «Огонь»")}`);
+        },
+      });
+    } else {
+      items.push({
+        label: `Патроны: ${w.name.toLowerCase()}`,
+        note: `+${w.magazine * 2} (2 магазина) · сейчас ${g.total}`,
+        price: w.ammoPrice * 2,
+        action: () => {
+          if (save.money < w.ammoPrice * 2) return;
+          addMoney(-w.ammoPrice * 2);
+          g.reserve += w.magazine * 2;
+          persist();
+          openGunShop();
+        },
+      });
+    }
+  }
+  openMenu("Оружейная лавка «Калибр»", items);
+}
+
 // ---------------------------------------------------------------- missions, garage, paint shop
 
 const STORY = storyMissions(layout.n);
@@ -1127,7 +1388,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -1376,6 +1637,8 @@ function updateMissions(dt: number): void {
     else openWorkshop(v);
   }
   if (!runner.active && entered("shop", PLACES.shop.x, PLACES.shop.z, 5, !v || speedOf(v.state) < 3)) openShop();
+  // Ammo is for sale mid-mission too.
+  if (entered("gunShop", PLACES.gunShop.x, PLACES.gunShop.z, 4, !v && !player.boat)) openGunShop();
   if (!runner.active && v && entered("depot", PLACES.depot.x, PLACES.depot.z, 6, speedOf(v.state) < 4)) {
     startMission(makeCourierRun(rng, roadPoints, PLACES.depot));
   }
@@ -1578,7 +1841,7 @@ function syncMissionVisuals(dt: number): void {
     else if (mb && mb !== player.boat && !mb.state.sunk) targetArrow.show(mb.state.x, mb.state.z, color, dt);
   }
   syncBusinessMarkers(dt);
-  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- businesses
@@ -2037,7 +2300,9 @@ function update(dt: number, now: number): void {
   radio.update(!!player.vehicle && player.dead === 0 && !audio.muted);
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
   if (input.justPressed("Escape") && touch.enabled) setPaused(true);
-  if (input.justPressed("KeyR")) {
+  if (input.justPressed("KeyQ") && !player.dead) cycleWeapon();
+  // On foot with a gun R reloads; otherwise it changes the station.
+  if (input.justPressed("KeyR") && (player.vehicle || player.boat || !heldGun())) {
     const name = radio.next();
     save.radio = radio.station;
     persist();
@@ -2123,6 +2388,7 @@ function update(dt: number, now: number): void {
         }
       }
     }
+    stepPlayerGun(dt);
     const near = nearestEnterable();
     const boat = nearestBoat();
     if (input.justPressed("KeyE", "KeyF")) {
@@ -2499,7 +2765,12 @@ function syncVisuals(dt: number): void {
     playerVis.group.position.set(player.x, ground(player.x, player.z), player.z);
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
     animatePedestrian(playerVis, player.dead > 0 ? 0 : player.speed, dt, player.dead > 0 ? 1 : 0);
+    const gun = heldGun();
+    gunMesh.visible = !!gun;
+    // Aiming: the gun arm comes up while shooting and for a moment after.
+    if (gun && !player.dead && (simTime - lastShot < 1.2 || input.isDown("Mouse0", "KeyX"))) playerVis.armR.rotation.x = -Math.PI / 2;
   }
+  fadeTracers(dt);
   for (const b of boats) syncBoatVisual(b.visual, b.state, dt, simTime, b.police && wanted.level > 0);
   smoke.update(dt);
   fire.update(dt);
@@ -2525,8 +2796,17 @@ function updateHud(): void {
   }
   else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
   else if (nearestBoat() && !nearestEnterable()) hintEl.textContent = k("E — сесть в катер", "Жмите «Сесть»");
-  else hintEl.textContent = nearestEnterable() ? k("E — сесть в машину", "Жмите «Сесть»") : touch.enabled ? "" : "WASD — идти · Shift — бежать";
-  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active);
+  else if (nearestEnterable()) hintEl.textContent = k("E — сесть в машину", "Жмите «Сесть»");
+  else if (heldGun()) hintEl.textContent = touch.enabled ? "" : "ЛКМ или X — огонь · R — перезарядка · Q — убрать";
+  else hintEl.textContent = touch.enabled ? "" : "WASD — идти · Shift — бежать";
+  const gun = heldGun();
+  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, !!gun);
+  weaponEl.classList.toggle("show", !!gun && !v && !boat && !player.dead);
+  if (gun) {
+    const txt = `${gun.spec.name} · ${gun.reloading > 0 ? "перезарядка" : gun.mag} / ${gun.reserve}`;
+    if (weaponEl.textContent !== txt) weaponEl.textContent = txt;
+    weaponEl.classList.toggle("empty", gun.total === 0);
+  }
   hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
   const stars = starsEl.children;
   for (let i = 0; i < stars.length; i++) stars[i].classList.toggle("on", i < wanted.level);
@@ -2593,6 +2873,7 @@ function updateHud(): void {
     { ...PLACES.garage, color: "#7bed9f", label: "Г" },
     { ...PLACES.paint, color: "#48dbfb", label: "П" },
     { ...PLACES.shop, color: "#c56cf0", label: "А" },
+    { ...PLACES.gunShop, color: "#e17055", label: "О" },
   ];
   if (!runner.active) {
     const next = nextStory();
@@ -2700,6 +2981,15 @@ if (location.search.includes("debug")) {
     taxi: () => taxi,
     land,
     openShop,
+    openGunShop,
+    guns,
+    weapon: () => weaponId,
+    giveGun: (id: string, rounds = 60) => {
+      guns[id] = new Gun(WEAPONS[id], rounds);
+      weaponId = id;
+    },
+    cycleWeapon,
+    spawnCop,
     startMission: (id: string) => {
       const m = [...STORY, RACE, REGATTA_M].find((x) => x.id === id);
       if (m && !runner.active) startMission(m);

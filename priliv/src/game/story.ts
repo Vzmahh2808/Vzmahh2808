@@ -25,6 +25,8 @@ export interface Places {
   depot: Point;
   /** Nika's corner, where chapter three is handed out. */
   office: Point;
+  /** Gun shop «Калибр». */
+  gunShop: Point;
   /** Where cars bought at the shop are delivered. */
   shopLot: { x: number; z: number; heading: number };
   garageSlots: Array<{ x: number; z: number; heading: number }>;
@@ -41,6 +43,7 @@ export function places(n: number): Places {
     shop: road(n, n / 2 + 1, n / 2, 0, mid),
     depot: road(n, 3, n, mid, -2),
     office: road(n, 1, 2, mid, 0),
+    gunShop: road(n, 2, 6, 0, mid),
     shopLot: { ...road(n, n / 2 + 1, n / 2, 3.6, mid + 12), heading: Math.PI / 2 },
     garageSlots: [-16, -9, 9].map((dx) => ({ x: garage.x + dx, z: garage.z + 3.6, heading: 0 })),
   };
