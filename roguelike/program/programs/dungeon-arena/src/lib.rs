@@ -26,7 +26,7 @@ pub mod state;
 use logic::SlotHashLookup;
 pub use state::*;
 
-declare_id!("2v5bvVWahuuibFqe9byqwJAVbUynx6EifhWKJwHsPvpE");
+declare_id!("JzZMdH9r4NYSyyAbsuUUupvnsR6xe9b585KGYdMDupJ");
 
 #[program]
 pub mod dungeon_arena {

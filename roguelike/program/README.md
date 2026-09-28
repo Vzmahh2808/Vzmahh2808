@@ -67,11 +67,28 @@
 
 ## Деплой в devnet
 
-Адрес в `declare_id!` — заготовка. Для своего деплоя:
+Адрес программы: `JzZMdH9r4NYSyyAbsuUUupvnsR6xe9b585KGYdMDupJ` ([Solana Explorer](https://explorer.solana.com/address/JzZMdH9r4NYSyyAbsuUUupvnsR6xe9b585KGYdMDupJ?cluster=devnet)).
+
+Деплоит CI. Job `deploy-devnet` в `.github/workflows/program.yml` после тестов берёт собранный `dungeon_arena.so` и запускает `scripts/deploy-devnet.sh`. Скрипт:
+- при первом деплое создаёт программу по её ключу;
+- при следующих пушах обновляет программу, если сборка отличается от той, что в сети, и ничего не делает, если совпадает;
+- если у деплоера не хватает SOL, пробует airdrop, а если не вышло, падает и пишет адрес деплоера и нужную сумму (для этой программы порядка 2–3 SOL, взять можно на https://faucet.solana.com).
+
+Ключи лежат в секретах репозитория (Settings → Secrets and variables → Actions), в формате `solana-keygen`, то есть JSON-массив из 64 чисел:
+
+| Секрет | Зачем |
+|---|---|
+| `SOLANA_DEVNET_DEPLOYER` | платит за деплой и становится upgrade authority |
+| `ARENA_PROGRAM_KEYPAIR` | нужен только для первого деплоя, его адрес должен совпадать с `declare_id!` |
+
+Пока `SOLANA_DEVNET_DEPLOYER` не задан, job пропускает деплой. Руками то же самое:
 
 ```bash
-solana-keygen new -o target/deploy/dungeon_arena-keypair.json
-solana address -k target/deploy/dungeon_arena-keypair.json   # вписать в declare_id! в programs/dungeon-arena/src/lib.rs
 cargo build-sbf --manifest-path programs/dungeon-arena/Cargo.toml
-solana program deploy --url devnet target/deploy/dungeon_arena.so --program-id target/deploy/dungeon_arena-keypair.json
+scripts/deploy-devnet.sh target/deploy/dungeon_arena.so deployer.json program.json
 ```
+
+Для своей копии с другим адресом:
+1. Создай ключ программы: `solana-keygen new -o program.json`.
+2. Впиши `solana address -k program.json` в `declare_id!` (`programs/dungeon-arena/src/lib.rs`) и в `ARENA_PROGRAM_ID` (`src/chain/arena-program.ts`).
+3. Обнови эталон для TS: `UPDATE_FIXTURES=1 cargo test -p dungeon-arena`.

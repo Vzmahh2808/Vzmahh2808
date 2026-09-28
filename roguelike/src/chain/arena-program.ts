@@ -5,7 +5,7 @@
  */
 import { PublicKey, SYSVAR_SLOT_HASHES_PUBKEY, SystemProgram, TransactionInstruction, type AccountMeta } from "@solana/web3.js";
 
-export const ARENA_PROGRAM_ID = new PublicKey("2v5bvVWahuuibFqe9byqwJAVbUynx6EifhWKJwHsPvpE");
+export const ARENA_PROGRAM_ID = new PublicKey("JzZMdH9r4NYSyyAbsuUUupvnsR6xe9b585KGYdMDupJ");
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 export const MAX_PLACES = 5;
