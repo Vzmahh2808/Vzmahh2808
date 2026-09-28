@@ -13,6 +13,8 @@ export interface SpawnSpec {
   heading: number;
   /** Drive around as traffic instead of sitting parked. */
   drives: boolean;
+  /** A gang hunter: chases and rams the player instead of driving as traffic. */
+  hostile?: boolean;
 }
 
 /** A boat a mission puts on the water; with a route it sails it, fleeing from the player. */
@@ -41,7 +43,9 @@ export type Step =
   /** Stay inside a zone for a number of seconds in total. */
   | { kind: "hold"; at: Point; radius: number; seconds: number; text: string }
   /** Rigged car: once above `min` m/s it must not drop below it for long, or it blows up. */
-  | { kind: "speed"; target: string; min: number; seconds: number; text: string };
+  | { kind: "speed"; target: string; min: number; seconds: number; text: string }
+  /** Stay alive for a number of seconds. */
+  | { kind: "survive"; seconds: number; text: string };
 
 /** Tail tolerances in seconds. */
 export const TAIL_SPOTTED = 2.5;
@@ -173,6 +177,8 @@ export class MissionRunner {
         };
       case "hold":
         return { label: "Удержание", value: this.progress / s.seconds, warn: "" };
+      case "survive":
+        return { label: `Продержитесь ${Math.ceil(Math.max(0, s.seconds - this.progress))} с`, value: this.progress / s.seconds, warn: "" };
       case "collect": {
         const got = this.collected.filter(Boolean).length;
         return { label: `Собрано ${got} из ${s.points.length}`, value: got / s.points.length, warn: "" };
@@ -285,6 +291,10 @@ export class MissionRunner {
       }
       case "hold":
         if (Math.hypot(ctx.x - s.at.x, ctx.z - s.at.z) < s.radius) this.progress += dt;
+        done = this.progress >= s.seconds;
+        break;
+      case "survive":
+        this.progress += dt;
         done = this.progress >= s.seconds;
         break;
       case "speed": {

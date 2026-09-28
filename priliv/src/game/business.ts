@@ -137,7 +137,7 @@ export type HoldingsEvent = { type: "raid"; id: string } | { type: "robbed"; id:
  * shakedowns, and every few hours put one of the player's businesses under
  * pressure.
  */
-export function tick(h: Holdings, all: Business[], hours: number, rng: Rng): HoldingsEvent[] {
+export function tick(h: Holdings, all: Business[], hours: number, rng: Rng, raids = true): HoldingsEvent[] {
   const events: HoldingsEvent[] = [];
   const owned = all.filter((b) => stateOf(h, b.id).owned);
   for (const b of owned) {
@@ -153,7 +153,7 @@ export function tick(h: Holdings, all: Business[], hours: number, rng: Rng): Hol
     }
     s.stored = Math.min(b.cap, s.stored + b.income * hours);
   }
-  if (owned.length === 0) return events;
+  if (owned.length === 0 || !raids) return events;
   h.nextRaid -= hours;
   if (h.nextRaid <= 0) {
     h.nextRaid = RAID_EVERY;
