@@ -29,6 +29,13 @@ export interface BoatSpawnSpec {
   health?: number;
 }
 
+/** A gang member on foot, standing guard until the player shows up. */
+export interface ThugSpec {
+  x: number;
+  z: number;
+  heading: number;
+}
+
 export type Step =
   | { kind: "goto"; at: Point; radius: number; vehicle?: "any" | "none" | string; stop?: boolean; text: string }
   | { kind: "enter"; target: string; text: string }
@@ -45,7 +52,9 @@ export type Step =
   /** Rigged car: once above `min` m/s it must not drop below it for long, or it blows up. */
   | { kind: "speed"; target: string; min: number; seconds: number; text: string }
   /** Stay alive for a number of seconds. */
-  | { kind: "survive"; seconds: number; text: string };
+  | { kind: "survive"; seconds: number; text: string }
+  /** Take out every listed target: thugs on foot or vehicles. */
+  | { kind: "clear"; targets: string[]; text: string };
 
 /** Tail tolerances in seconds. */
 export const TAIL_SPOTTED = 2.5;
@@ -84,6 +93,10 @@ export interface Mission {
   boats?: Record<string, BoatSpawnSpec>;
   /** Weather forced on when the mission starts. */
   weather?: "clear" | "cloudy" | "rain" | "storm";
+  /** Gang members on foot; steps refer to them by key and count them destroyed once down. */
+  thugs?: Record<string, ThugSpec>;
+  /** Leaving this circle fails the mission. */
+  area?: { at: Point; radius: number };
 }
 
 export interface MissionContext {
@@ -94,7 +107,7 @@ export interface MissionContext {
   stars: number;
   /** Player's current speed in m/s (on foot or in a car). */
   speed?: number;
-  /** Mission vehicles that are burning or wrecked. */
+  /** Mission vehicles that are burning or wrecked, and thugs that are down. */
   destroyed: Set<string>;
   /** Positions of the mission vehicles, for tailing. */
   targets?: Record<string, Point>;
@@ -124,6 +137,9 @@ export class MissionRunner {
   /** A rigged car arms once it first reaches its minimum speed. */
   armed = false;
   collected: boolean[] = [];
+  /** Targets of a clear step already taken out. */
+  cleared = 0;
+  private down = new Set<string>();
 
   get active(): boolean {
     return this.mission !== null;
@@ -159,6 +175,8 @@ export class MissionRunner {
     this.spotted = 0;
     this.lost = 0;
     this.armed = false;
+    this.cleared = 0;
+    this.down = new Set();
     const s = this.currentStep;
     this.collected = s?.kind === "collect" ? s.points.map(() => false) : [];
   }
@@ -182,6 +200,10 @@ export class MissionRunner {
       case "collect": {
         const got = this.collected.filter(Boolean).length;
         return { label: `Собрано ${got} из ${s.points.length}`, value: got / s.points.length, warn: "" };
+      }
+      case "clear": {
+        const n = s.targets.length;
+        return { label: `Осталось ${n - this.cleared} из ${n}`, value: this.cleared / n, warn: "" };
       }
       case "speed":
         return {
@@ -215,6 +237,21 @@ export class MissionRunner {
     }
     if (s.kind === "race") return s.points[this.checkpoint] ?? null;
     if (s.kind === "enter" || s.kind === "destroy") return targets[s.target] ?? null;
+    if (s.kind === "clear") {
+      // The nearest target still standing.
+      let best: Point | null = null;
+      let bestD = Infinity;
+      for (const key of s.targets) {
+        const p = targets[key];
+        if (!p || this.down.has(key)) continue;
+        const d = from ? Math.hypot(p.x - from.x, p.z - from.z) : 0;
+        if (d < bestD) {
+          bestD = d;
+          best = p;
+        }
+      }
+      return best;
+    }
     return null;
   }
 
@@ -224,6 +261,7 @@ export class MissionRunner {
     this.elapsed += dt;
     if (m.protect && ctx.destroyed.has(m.protect)) return this.fail("груз уничтожен");
     if (m.time !== undefined && this.elapsed > m.time) return this.fail("время вышло");
+    if (m.area && Math.hypot(ctx.x - m.area.at.x, ctx.z - m.area.at.z) > m.area.radius) return this.fail("вы ушли с разборки");
     const s = m.steps[this.step];
     const events: MissionEvent[] = [];
     let done = false;
@@ -296,6 +334,11 @@ export class MissionRunner {
       case "survive":
         this.progress += dt;
         done = this.progress >= s.seconds;
+        break;
+      case "clear":
+        this.down = new Set(s.targets.filter((t) => ctx.destroyed.has(t)));
+        this.cleared = this.down.size;
+        done = this.cleared >= s.targets.length;
         break;
       case "speed": {
         if (ctx.destroyed.has(s.target)) return this.fail("машина уничтожена");
