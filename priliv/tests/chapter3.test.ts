@@ -120,7 +120,7 @@ describe("chapter three", () => {
     expect(all.length).toBeGreaterThanOrEqual(15);
     expect(all[10].id).toBe("ch3-tail");
     expect(all[10].chapterTitle).toBe("Глава 3: Большая вода");
-    expect(all.filter((m) => m.chapterTitle).map((m) => m.chapter)).toEqual([2, 3, 4]);
+    expect(all.filter((m) => m.chapterTitle).map((m) => m.chapter)).toEqual([2, 3, 4, 5]);
     expect(BOMB_SPEED * 3.6).toBeCloseTo(50);
   });
 

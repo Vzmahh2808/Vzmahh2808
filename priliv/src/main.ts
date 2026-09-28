@@ -18,6 +18,7 @@ import { Minimap } from "./ui/minimap";
 import { Wanted, type Crime } from "./police/wanted";
 import { lineOfSight, makeUnit, nearestIntersection, policeDrive, type PoliceUnit } from "./police/policeAI";
 import { Helicopter } from "./police/helicopter";
+import { gangDrive } from "./police/gangAI";
 import { clearSave, freshSave, loadSave, storeInGarage, writeSave, type SaveData } from "./game/save";
 import { MissionRunner, type Mission, type MissionEvent } from "./game/missions";
 import { places, raceMission, regattaMission, storyMissions } from "./game/story";
@@ -124,6 +125,8 @@ interface Vehicle {
   mods: CarMods;
   /** Height above the ground: ramps and jumps. */
   air: Air;
+  /** Gang hunter chasing the player during a mission. */
+  gang: PoliceUnit | null;
 }
 
 const vehicles: Vehicle[] = [];
@@ -147,6 +150,7 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     garaged: false,
     mods: { ...NO_MODS },
     air: freshAir(),
+    gang: null,
   };
   vehicles.push(v);
   return v;
@@ -221,6 +225,7 @@ function recycleAsTraffic(v: Vehicle): void {
   v.wreckAge = 0;
   v.rearPrev = null;
   v.air = freshAir();
+  v.gang = null;
   v.police = null;
   v.blame = -1e9;
   scene.add(v.visual.group);
@@ -1151,6 +1156,7 @@ function startMission(m: Mission): void {
       v.ai = trafficFor(v);
       v.input = v.ai.input;
     }
+    if (spec.hostile) v.gang = makeUnit("pursuit");
     v.missionKey = key;
     missionCars.set(key, v);
   }
@@ -1177,7 +1183,14 @@ function startMission(m: Mission): void {
 
 function endMission(): void {
   missionEndedAt = simTime;
-  for (const v of missionCars.values()) v.missionKey = null;
+  for (const v of missionCars.values()) {
+    v.missionKey = null;
+    // Hunters give up when the job is over.
+    if (v.gang) {
+      v.gang = null;
+      v.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
+    }
+  }
   missionCars.clear();
   for (const b of missionBoats.values()) {
     b.missionKey = null;
@@ -1263,6 +1276,11 @@ function handleMissionEvents(events: MissionEvent[]): void {
           const b = BUSINESSES.find((q) => `raid-${q.id}` === e.mission.id);
           if (b) stateOf(save.business, b.id).raid = 0;
           extra = " · банда больше не сунется";
+        } else if (e.mission.id === "ch5-siege") {
+          // The gang is finished: no more shakedowns, open ones are dropped.
+          for (const b of BUSINESSES) stateOf(save.business, b.id).raid = 0;
+          extra = " · банда разбита, наездов больше не будет";
+          if (!save.missionsDone.includes(e.mission.id)) save.missionsDone.push(e.mission.id);
         } else if (e.mission.id !== "courier" && !save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
@@ -1609,7 +1627,8 @@ function visitBusiness(b: Business): void {
 }
 
 function updateBusinesses(dt: number): void {
-  for (const e of tickBusiness(save.business, BUSINESSES, dt / SECONDS_PER_HOUR, rng)) {
+  const gangBroken = save.missionsDone.includes("ch5-siege");
+  for (const e of tickBusiness(save.business, BUSINESSES, dt / SECONDS_PER_HOUR, rng, !gangBroken)) {
     const b = BUSINESSES.find((q) => q.id === e.id)!;
     audio.alert();
     if (e.type === "raid") showBanner(`Наезд: ${b.name}! Приезжайте разобраться`);
@@ -2117,7 +2136,7 @@ function update(dt: number, now: number): void {
   // Vehicles.
   for (const v of vehicles) {
     const s = v.state;
-    if (s.burning && v !== player.vehicle && (v.ai || (v.police && v.police.mode !== "patrol"))) {
+    if (s.burning && v !== player.vehicle && (v.ai || v.gang || (v.police && v.police.mode !== "patrol"))) {
       // The driver bails out of a burning car.
       const door = sideDoor(s, 2.2);
       emergePed(door.x, door.z, s);
@@ -2148,6 +2167,9 @@ function update(dt: number, now: number): void {
       v.wreckAge += dt;
     }
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
+    if (v.gang && v !== player.vehicle && !s.wrecked && !s.burning) {
+      v.input = player.dead > 0 || player.boat ? { throttle: 0, steer: 0, brake: true, handbrake: false } : gangDrive(s, v.gang, layout, playerTarget(), dt);
+    }
     const prevX = s.x;
     const prevZ = s.z;
     if (v.air.airborne) {
@@ -2555,6 +2577,7 @@ function updateHud(): void {
       : x.state.wrecked ? "#555"
       : street?.rivals.some((r) => r.v === x) ? "#fd79a8"
       : x.state.burning ? "#ff6b3a"
+      : x.gang ? "#ff4757"
       : x.police && x.police.mode !== "patrol" ? (blink ? "#ff3b3b" : "#3b7bff")
       : x.police ? "#9ab8ff"
       : x.ai ? "#dfe6e9"

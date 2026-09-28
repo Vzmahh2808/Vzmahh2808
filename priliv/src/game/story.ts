@@ -89,7 +89,107 @@ export function raceMission(n: number): Mission {
 
 /** All chapters in play order. */
 export function storyMissions(n: number): Mission[] {
-  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour()];
+  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour(), ...chapterFive(n)];
+}
+
+/** Gosha's bar «Якорь», where chapter five is handed out. */
+export function barOf(n: number): Point {
+  return road(n, 5, 6, 0, PITCH / 2);
+}
+
+/** A gang car: black sedan that hunts the player. */
+function hunter(p: Point, heading: number): { kind: string; color: number; x: number; z: number; heading: number; drives: boolean; hostile: boolean } {
+  return { kind: "sedan", color: 0x16161a, x: p.x, z: p.z, heading, drives: false, hostile: true };
+}
+
+export function chapterFive(n: number): Mission[] {
+  const bar = barOf(n);
+  const V = Math.PI / 2;
+  const list: Mission[] = [
+    {
+      id: "ch5-mark",
+      chapter: 5,
+      chapterTitle: "Глава 5: Чёрная метка",
+      contact: bar,
+      title: "Чёрная метка",
+      brief: "Глава 5. Гоша держит бар «Якорь». Банда, что наезжает на бизнесы, пометила и вас: две их машины уже едут. Продержитесь минуту.",
+      reward: 2500,
+      time: 120,
+      spawns: { h1: hunter(road(n, 1, 6, 0, 20), V), h2: hunter(road(n, 7, 2, 0, 20), V) },
+      steps: [{ kind: "survive", seconds: 60, text: "Выживите, пока банда охотится за вами" }],
+    },
+    {
+      id: "ch5-nest",
+      chapter: 5,
+      contact: bar,
+      title: "Гнездо",
+      brief: "Гоша знает, где банда держит машины: у южной окраины. Разбейте все три, пока их охрана пытается вас остановить.",
+      reward: 3000,
+      time: 240,
+      spawns: {
+        c1: { kind: "sedan", color: 0x16161a, ...road(n, 6, 1, 20, 0), heading: 0, drives: false },
+        c2: { kind: "sedan", color: 0x16161a, ...road(n, 6, 1, -20, 0), heading: 0, drives: false },
+        c3: { kind: "sedan", color: 0x16161a, ...road(n, 6, 1, 0, 20), heading: V, drives: false },
+        guard: hunter(road(n, 4, 1, 0, 20), V),
+      },
+      steps: [
+        { kind: "destroy", target: "c1", text: "Разбейте первую машину банды" },
+        { kind: "destroy", target: "c2", text: "Разбейте вторую машину банды" },
+        { kind: "destroy", target: "c3", text: "Разбейте третью машину банды" },
+      ],
+    },
+    {
+      id: "ch5-hostage",
+      chapter: 5,
+      contact: bar,
+      title: "Заложник",
+      brief: "Банда держит брата Гоши в фургоне на юго-западе. Заберите фургон и довезите до бара. Охотники будут таранить, фургон должен уцелеть.",
+      reward: 3500,
+      time: 240,
+      protect: "van",
+      spawns: {
+        van: { kind: "van", color: 0x6d6875, ...road(n, 1, 1, 20, 0), heading: 0, drives: false },
+        h1: hunter(road(n, 2, 2, 0, 20), V),
+        h2: hunter(road(n, 1, 3, 0, 20), V),
+      },
+      steps: [
+        { kind: "enter", target: "van", text: "Сядьте в серый фургон" },
+        { kind: "goto", at: bar, radius: 8, vehicle: "van", text: "Довезите фургон до бара «Якорь»" },
+      ],
+    },
+    {
+      id: "ch5-boss",
+      chapter: 5,
+      contact: bar,
+      title: "Главарь",
+      brief: "Главарь банды катается на чёрном спорткаре с двумя охранниками. Остановите его.",
+      reward: 5000,
+      time: 300,
+      spawns: {
+        boss: { kind: "sport", color: 0x0b0c10, ...road(n, 7, 5, 0, 20), heading: V, drives: true },
+        h1: hunter(road(n, 7, 4, 0, 20), V),
+        h2: hunter(road(n, 6, 5, 20, 0), 0),
+      },
+      steps: [{ kind: "destroy", target: "boss", text: "Уничтожьте чёрный спорткар главаря" }],
+    },
+    {
+      id: "ch5-siege",
+      chapter: 5,
+      contact: bar,
+      title: "Последний бой",
+      brief: "Остатки банды идут на бар. Держитесь у «Якоря» 45 секунд. После этого на ваши бизнесы больше никто не наедет.",
+      reward: 15000,
+      time: 240,
+      spawns: {
+        h1: hunter(road(n, 3, 6, 20, 0), 0),
+        h2: hunter(road(n, 7, 6, 0, -20), -V),
+        h3: hunter(road(n, 5, 8, 0, -20), -V),
+        h4: hunter(road(n, 4, 7, 20, 0), 0),
+      },
+      steps: [{ kind: "hold", at: bar, radius: 18, seconds: 45, text: "Удержите бар «Якорь»" }],
+    },
+  ];
+  return list;
 }
 
 /** Captain Marta stands on the city marina pier. */

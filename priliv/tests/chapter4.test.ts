@@ -12,7 +12,7 @@ const ctx = (over: Partial<MissionContext> = {}): MissionContext => ({ x: 0, z: 
 describe("chapter four", () => {
   it("follows chapter three and starts on the marina pier", () => {
     const all = storyMissions(8);
-    expect(all.length).toBe(20);
+    expect(all.length).toBeGreaterThanOrEqual(20);
     expect(all[15].id).toBe("ch4-cargo");
     expect(all[15].chapterTitle).toBe("Глава 4: Открытая вода");
     expect(landAt(MARTA.x, MARTA.z, LIMIT)).toBe("pier");
