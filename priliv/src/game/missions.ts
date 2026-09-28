@@ -34,6 +34,10 @@ export interface ThugSpec {
   x: number;
   z: number;
   heading: number;
+  /** Already on the hunt when spawned, instead of standing guard. */
+  alerted?: boolean;
+  /** Health; ordinary thugs have 60. */
+  hp?: number;
 }
 
 export type Step =
@@ -97,6 +101,8 @@ export interface Mission {
   thugs?: Record<string, ThugSpec>;
   /** Leaving this circle fails the mission. */
   area?: { at: Point; radius: number };
+  /** A gun handed over when the mission starts; rounds are added if the player already has one. */
+  gift?: { weapon: string; rounds: number };
 }
 
 export interface MissionContext {

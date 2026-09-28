@@ -14,7 +14,7 @@ const ctx = (over: Partial<MissionContext> = {}): MissionContext => ({ x: 0, z: 
 describe("chapter five", () => {
   it("follows chapter four and opens with a banner", () => {
     const all = storyMissions(8);
-    expect(all.length).toBe(25);
+    expect(all.length).toBe(30);
     expect(all[20].id).toBe("ch5-mark");
     expect(all[20].chapterTitle).toBe("Глава 5: Чёрная метка");
   });
