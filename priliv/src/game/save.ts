@@ -33,6 +33,8 @@ export interface SaveData {
   stunts: { done: string[]; best: number };
   /** Guns bought, rounds carried for each, and the one in hand. */
   weapons: { owned: string[]; ammo: Record<string, number>; selected: string | null };
+  /** Gang hideouts cleared for good. */
+  hideouts: string[];
 }
 
 export interface KeyValueStore {
@@ -57,6 +59,7 @@ export function freshSave(): SaveData {
     business: freshHoldings(),
     stunts: { done: [], best: 0 },
     weapons: { owned: [], ammo: {}, selected: null },
+    hideouts: [],
   };
 }
 
@@ -141,6 +144,7 @@ export function parseSave(raw: string | null): SaveData | null {
     },
     business: parseHoldings(data.business),
     weapons: parseWeapons(data.weapons),
+    hideouts: Array.isArray(data.hideouts) ? [...new Set(data.hideouts.filter((h): h is string => typeof h === "string"))] : [],
     stunts: {
       done: Array.isArray(data.stunts?.done) ? [...new Set(data.stunts.done.filter((d): d is string => typeof d === "string"))] : [],
       best: Math.max(0, Math.floor(num(data.stunts?.best, 0))),

@@ -174,4 +174,4 @@ body.touch #touch.in-car.taxi .job { display: block; }
 body.touch #weapon { left: 132px; top: 88px; bottom: auto; font-size: 12px; }
 body.touch #hint { top: 116px; }
 body.touch #touch .gun { display: none; }
-body.touch #touch.armed:not(.in-car) .gun { display: block; background: rgba(225,112,85,0.85); border-color: transparent; }
+body.touch #touch.armed .gun { display: block; background: rgba(225,112,85,0.85); border-color: transparent; }

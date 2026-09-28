@@ -38,6 +38,8 @@ import { buildRamps } from "./world/rampMesh";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
 import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
 import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapons";
+import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
+import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -128,6 +130,8 @@ interface Vehicle {
   air: Air;
   /** Gang hunter chasing the player during a mission. */
   gang: PoliceUnit | null;
+  /** Seconds until a hunter may shoot from its window again. */
+  gunTimer: number;
 }
 
 const vehicles: Vehicle[] = [];
@@ -152,6 +156,7 @@ function addVehicle(state: CarState, kind: string, color: number, ai: TrafficCar
     mods: { ...NO_MODS },
     air: freshAir(),
     gang: null,
+    gunTimer: 1.5,
   };
   vehicles.push(v);
   return v;
@@ -1185,8 +1190,9 @@ function shotEnd(ox: number, oz: number, ang: number, range: number): { x: numbe
 const pedHp = new WeakMap<Ped, number>();
 /** Shooting is heard; only every so often does it add to the wanted level. */
 let lastShotCrime = -1e9;
-/** simTime of the player's last shot, to keep the gun arm raised. */
+/** simTime and place of the player's last shot: keeps the gun arm raised and wakes thugs nearby. */
 let lastShot = -1e9;
+const lastShotAt = { x: 0, z: 0 };
 
 interface ShotTarget {
   id: number;
@@ -1194,32 +1200,52 @@ interface ShotTarget {
   z: number;
   ped?: Ped;
   cop?: Cop;
+  thug?: Thug;
   car?: Vehicle;
 }
 
-function fireShot(gun: Gun): void {
+/** Where the player shoots from: on foot the aim turns the body, from a car it does not. */
+interface Shooter {
+  x: number;
+  z: number;
+  heading: number;
+  cone: number;
+  range: number;
+  /** Multiplier on the hit chance. */
+  accuracy: number;
+  /** The player's own car, which the bullets must not hit. */
+  car: Vehicle | null;
+}
+
+function fireShot(gun: Gun, from: Shooter): void {
   const spec = gun.spec;
-  const ox = player.x;
-  const oz = player.z;
-  const near = (x: number, z: number) => Math.abs(x - ox) < spec.range && Math.abs(z - oz) < spec.range;
+  const ox = from.x;
+  const oz = from.z;
+  const near = (x: number, z: number) => Math.abs(x - ox) < from.range && Math.abs(z - oz) < from.range;
+  const alive = (p: Ped) => p.state !== "down" && p.state !== "gone";
   const cands: ShotTarget[] = [];
   let id = 0;
-  for (const c of cops) if (c.ped.state !== "down" && c.ped.state !== "gone" && near(c.ped.x, c.ped.z)) cands.push({ id: id++, x: c.ped.x, z: c.ped.z, cop: c });
-  for (const p of peds) if (p.state !== "down" && p.state !== "gone" && near(p.x, p.z)) cands.push({ id: id++, x: p.x, z: p.z, ped: p });
-  for (const v of vehicles) if (!v.state.wrecked && near(v.state.x, v.state.z)) cands.push({ id: id++, x: v.state.x, z: v.state.z, car: v });
-  const t = pickTarget(ox, oz, player.heading, cands, spec.range, spec.cone, (x, z) => lineOfSight(layout, ox, oz, x, z));
-  // Auto-aim turns the shooter to the target.
-  if (t) player.heading = Math.atan2(t.z - oz, t.x - ox);
-  const gy = ground(ox, oz) + 1.35;
-  const mx = ox + Math.cos(player.heading) * 0.75;
-  const mz = oz + Math.sin(player.heading) * 0.75;
+  for (const t of thugs) if (alive(t.ped) && near(t.ped.x, t.ped.z)) cands.push({ id: id++, x: t.ped.x, z: t.ped.z, thug: t });
+  for (const c of cops) if (alive(c.ped) && near(c.ped.x, c.ped.z)) cands.push({ id: id++, x: c.ped.x, z: c.ped.z, cop: c });
+  for (const p of peds) if (alive(p) && near(p.x, p.z)) cands.push({ id: id++, x: p.x, z: p.z, ped: p });
+  for (const v of vehicles) if (v !== from.car && !v.state.wrecked && near(v.state.x, v.state.z)) cands.push({ id: id++, x: v.state.x, z: v.state.z, car: v });
+  const t = pickTarget(ox, oz, from.heading, cands, from.range, from.cone, (x, z) => lineOfSight(layout, ox, oz, x, z));
+  // On foot, auto-aim turns the shooter to the target.
+  if (t && !from.car) player.heading = Math.atan2(t.z - oz, t.x - ox);
+  const aim = t ? Math.atan2(t.z - oz, t.x - ox) : from.heading;
+  const reach = from.car ? 1.3 : 0.75;
+  const gy = ground(ox, oz) + (from.car ? 1.3 : 1.35);
+  const mx = ox + Math.cos(aim) * reach;
+  const mz = oz + Math.sin(aim) * reach;
   muzzleFlash(mx, gy, mz);
   flash.position.set(mx, gy, mz);
   flash.intensity = Math.max(flash.intensity, 60);
   audio.gunshot(0);
   lastShot = simTime;
+  lastShotAt.x = ox;
+  lastShotAt.z = oz;
   const d = t ? Math.hypot(t.x - ox, t.z - oz) : 0;
-  const hit = !!t && rng.chance(hitChance(d, spec.range));
+  const hit = !!t && rng.chance(hitChance(d, spec.range) * from.accuracy);
   if (t && hit) {
     tracer(mx, gy, mz, t.x, ground(t.x, t.z) + (t.car ? 0.9 : 1.2), t.z);
     const dx = (t.x - ox) / (d || 1);
@@ -1232,6 +1258,14 @@ function fireShot(gun: Gun): void {
         pedHp.delete(t.ped);
         crime("shootPed", t.x, t.z, false);
       } else scare(t.ped, { x: ox, z: oz }, 6);
+    } else if (t.thug) {
+      t.thug.hp -= spec.damage;
+      t.thug.brain.alerted = true;
+      if (t.thug.hp <= 0) {
+        knockPed(t.thug.ped, dx * 3, dz * 3);
+        // Whatever was in his pockets.
+        addMoney(rng.int(20, 60));
+      }
     } else if (t.cop) {
       t.cop.hp -= spec.damage;
       if (t.cop.hp <= 0) {
@@ -1248,11 +1282,11 @@ function fireShot(gun: Gun): void {
     }
   } else {
     // A miss: off to the side of the target, or straight ahead into whatever is there.
-    const ang = t ? Math.atan2(t.z - oz, t.x - ox) + (rng.next() - 0.5) * 0.12 : player.heading;
-    const end = shotEnd(ox, oz, ang, spec.range);
+    const ang = aim + (t ? (rng.next() - 0.5) * 0.12 : 0);
+    const end = shotEnd(mx, mz, ang, from.range);
     tracer(mx, gy, mz, end.x, gy - 0.2, end.z);
   }
-  for (const p of peds) if (p.state !== "down" && p.state !== "gone" && Math.abs(p.x - ox) < 35 && Math.abs(p.z - oz) < 35) scare(p, { x: ox, z: oz }, 6);
+  for (const p of peds) if (alive(p) && Math.abs(p.x - ox) < 35 && Math.abs(p.z - oz) < 35) scare(p, { x: ox, z: oz }, 6);
   if (simTime - lastShotCrime > 4) {
     lastShotCrime = simTime;
     crime("shooting", ox, oz, true);
@@ -1274,19 +1308,47 @@ function cycleWeapon(): void {
   showBanner(weaponId ? WEAPONS[weaponId].name : "Оружие убрано");
 }
 
-/** Walking with a gun: hold fire to shoot, R to reload. */
-function stepPlayerGun(dt: number): void {
+/**
+ * Hold fire to shoot. On foot R reloads and aim turns the body; from a car the
+ * shots go out of the window at anything ahead or to the sides, less accurately.
+ */
+function stepPlayerGun(dt: number, car: Vehicle | null): void {
   const gun = heldGun();
   for (const g of Object.values(guns)) if (g !== gun) g.update(dt, false);
   if (!gun) return;
-  if (input.justPressed("KeyR") && gun.startReload()) showBanner("Перезарядка…");
+  if (!car && input.justPressed("KeyR") && gun.startReload()) showBanner("Перезарядка…");
   const trigger = input.isDown("Mouse0", "KeyX");
   if (trigger && gun.total === 0 && input.justPressed("Mouse0", "KeyX")) {
     audio.alert();
     showBanner("Нет патронов. Купите в лавке «Калибр»");
   }
   const shots = gun.update(dt, trigger);
-  for (let i = 0; i < shots; i++) fireShot(gun);
+  const from: Shooter = car
+    ? { x: car.state.x, z: car.state.z, heading: car.state.heading, cone: 1.3, range: gun.spec.range * 0.85, accuracy: 0.75, car }
+    : { x: player.x, z: player.z, heading: player.heading, cone: gun.spec.cone, range: gun.spec.range, accuracy: 1, car: null };
+  for (let i = 0; i < shots; i++) fireShot(gun, from);
+}
+
+/** An enemy fires from (x, z) at the player `d` metres away: a tracer, and maybe a hit. */
+function enemyShot(x: number, z: number, heading: number, d: number, color: number, range = 30): void {
+  const gy = ground(x, z) + 1.35;
+  const mx = x + Math.cos(heading) * 0.7;
+  const mz = z + Math.sin(heading) * 0.7;
+  muzzleFlash(mx, gy, mz);
+  audio.gunshot(d);
+  if (rng.chance(enemyHitChance(d))) {
+    tracer(mx, gy, mz, player.x, ground(player.x, player.z) + (player.vehicle ? 0.9 : 1.2), player.z, color);
+    if (player.vehicle) player.vehicle.state.health = Math.max(0, player.vehicle.state.health - 3 * armorFactor(player.vehicle.mods));
+    else {
+      player.health -= 8;
+      shake = Math.max(shake, 0.25);
+      if (player.health <= 0) killPlayer("Вас застрелили");
+    }
+  } else {
+    const ang = Math.atan2(player.z - z, player.x - x) + (rng.next() - 0.5) * 0.25;
+    const end = shotEnd(mx, mz, ang, range);
+    tracer(mx, gy, mz, end.x, gy - 0.3, end.z, color);
+  }
 }
 
 /** A cop on foot with a clear line fires at the player on three stars and up. */
@@ -1297,25 +1359,122 @@ function copShoot(c: Cop, d: number, dt: number): boolean {
   c.shootTimer -= dt;
   if (c.shootTimer > 0) return true;
   c.shootTimer = 0.9 + rng.next() * 0.7;
-  const gy = ground(p.x, p.z) + 1.35;
-  const mx = p.x + Math.cos(p.heading) * 0.7;
-  const mz = p.z + Math.sin(p.heading) * 0.7;
-  muzzleFlash(mx, gy, mz);
-  audio.gunshot(d);
-  if (rng.chance(hitChance(d, 30) * 0.6)) {
-    tracer(mx, gy, mz, player.x, ground(player.x, player.z) + (player.vehicle ? 0.9 : 1.2), player.z, 0xffb0a0);
-    if (player.vehicle) player.vehicle.state.health = Math.max(0, player.vehicle.state.health - 3 * armorFactor(player.vehicle.mods));
-    else {
-      player.health -= 8;
-      shake = Math.max(shake, 0.25);
-      if (player.health <= 0) killPlayer("Вас застрелили");
-    }
-  } else {
-    const ang = Math.atan2(player.z - p.z, player.x - p.x) + (rng.next() - 0.5) * 0.25;
-    const end = shotEnd(p.x, p.z, ang, 30);
-    tracer(mx, gy, mz, end.x, gy - 0.3, end.z, 0xffb0a0);
-  }
+  enemyShot(p.x, p.z, p.heading, d, 0xffb0a0);
   return true;
+}
+
+// ---------------------------------------------------------------- gang members on foot
+
+interface Thug {
+  ped: Ped;
+  vis: PedVisual;
+  gun: THREE.Mesh;
+  hp: number;
+  brain: ThugBrain;
+  /** Key in the running mission, or null for thugs who jumped out of a hunter car. */
+  key: string | null;
+}
+const thugs: Thug[] = [];
+const missionThugs = new Map<string, Thug>();
+const THUG_GUN_GEO = new THREE.BoxGeometry(0.08, 0.3, 0.12);
+const THUG_GUN_MAT = new THREE.MeshStandardMaterial({ color: 0x1d1f24, roughness: 0.5, metalness: 0.6 });
+
+function spawnThug(x: number, z: number, heading: number, key: string | null, alerted: boolean): Thug {
+  // Black jackets and red caps.
+  const vis = buildPedestrian(0x1c1c22, 0x2d3436, rng.pick(SKINS), 0xc0392b);
+  vis.group.traverse((o) => (o.castShadow = false));
+  const gun = new THREE.Mesh(THUG_GUN_GEO, THUG_GUN_MAT);
+  gun.position.set(0, -0.68, 0.04);
+  vis.armR.add(gun);
+  scene.add(vis.group);
+  const ped: Ped = { id: -2, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0 };
+  const t: Thug = { ped, vis, gun, hp: 60, brain: freshBrain(alerted), key };
+  thugs.push(t);
+  return t;
+}
+
+function removeThug(i: number): void {
+  scene.remove(thugs[i].vis.group);
+  thugs.splice(i, 1);
+}
+
+function stepThugs(dt: number): void {
+  const collide = (x: number, z: number) => resolveCircleVsBuildings(layout, x, z, 0.35);
+  const heard = simTime - lastShot < 0.25;
+  const target = player.dead > 0 || player.boat ? null : player;
+  for (let i = thugs.length - 1; i >= 0; i--) {
+    const t = thugs[i];
+    const p = t.ped;
+    const d = Math.hypot(p.x - player.x, p.z - player.z);
+    if (p.state === "gone" || (!t.key && d > 160)) {
+      if (t.key) missionThugs.delete(t.key);
+      removeThug(i);
+      continue;
+    }
+    if (p.state === "down") {
+      // A mission keeps its bodies until it ends, so the count stays right.
+      if (t.key) p.timer = Math.max(p.timer, 1);
+      stepPed(p, walkGraph, rng, dt, [], collide);
+      continue;
+    }
+    if (!target) {
+      p.speed += (0 - p.speed) * Math.min(1, dt * 6);
+      continue;
+    }
+    const los = d < 45 && lineOfSight(layout, p.x, p.z, player.x, player.z);
+    const noise = heard && Math.hypot(p.x - lastShotAt.x, p.z - lastShotAt.z) < 45;
+    const intent = thugIntent(t.brain, p.x, p.z, player.x, player.z, los, noise, dt, () => rng.next());
+    if (intent.heading !== null) p.heading = intent.heading;
+    p.speed += (intent.speed - p.speed) * Math.min(1, dt * 6);
+    if (intent.fire) enemyShot(p.x, p.z, p.heading, d, 0xff7675, THUG_FIRE_RANGE);
+    const ox = p.x;
+    const oz = p.z;
+    p.x += Math.cos(p.heading) * p.speed * dt;
+    p.z += Math.sin(p.heading) * p.speed * dt;
+    if (land(p.x, p.z) === "water") {
+      p.x = ox;
+      p.z = oz;
+    }
+    const push = collide(p.x, p.z);
+    if (push) {
+      p.x += push.x;
+      p.z += push.z;
+    }
+    for (const v of vehicles) {
+      const dx = p.x - v.state.x;
+      const dz = p.z - v.state.z;
+      const min = v.radius * 0.85 + 0.35;
+      if (dx * dx + dz * dz > min * min) continue;
+      if (speedOf(v.state) > 3.5) {
+        knockPed(p, v.state.vx, v.state.vz);
+        t.hp = 0;
+        audio.thud();
+        break;
+      }
+      const dd = Math.hypot(dx, dz) || 1;
+      p.x += (dx / dd) * (min - dd);
+      p.z += (dz / dd) * (min - dd);
+    }
+  }
+}
+
+/** Gang hunters shoot from their windows, and let two gunmen out next to a player on foot. */
+function hunterGuns(v: Vehicle, dt: number): void {
+  const s = v.state;
+  if (player.dead > 0 || player.boat) return;
+  const d = Math.hypot(s.x - player.x, s.z - player.z);
+  if (!player.vehicle && !v.gang!.copOut && speedOf(s) < 5 && d < 18) {
+    v.gang!.copOut = true;
+    for (const side of [2.2, -2.2]) {
+      const door = sideDoor(s, side);
+      if (!resolveCircleVsBuildings(layout, door.x, door.z, 0.35)) spawnThug(door.x, door.z, s.heading, null, true);
+    }
+  }
+  if (d > 22) return;
+  v.gunTimer -= dt;
+  if (v.gunTimer > 0 || !lineOfSight(layout, s.x, s.z, player.x, player.z)) return;
+  v.gunTimer = 1.1 + rng.next() * 0.8;
+  enemyShot(s.x, s.z, Math.atan2(player.z - s.z, player.x - s.x), d, 0xff7675, 22);
 }
 
 // ---------------------------------------------------------------- gun shop
@@ -1335,6 +1494,7 @@ function openGunShop(): void {
         price: w.price,
         action: () => {
           if (save.money < w.price || guns[id]) return;
+          const first = Object.keys(guns).length === 0;
           addMoney(-w.price);
           guns[id] = new Gun(w, w.magazine * 3);
           weaponId = id;
@@ -1342,6 +1502,7 @@ function openGunShop(): void {
           openGunShop();
           audio.alert();
           showBanner(`Куплено: ${w.name}. ${k("Огонь — ЛКМ или X, Q — сменить", "Жмите «Огонь»")}`);
+          if (first) setTimeout(() => showBanner("На карте появились притоны банды: метки Б"), 4000);
         },
       });
     } else {
@@ -1434,6 +1595,13 @@ function startMission(m: Mission): void {
     }
     missionBoats.set(key, b);
   }
+  for (const spec of Object.values(m.thugs ?? {})) {
+    // Leftovers from a failed attempt make way for the new crew.
+    for (let i = thugs.length - 1; i >= 0; i--) {
+      if (Math.hypot(thugs[i].ped.x - spec.x, thugs[i].ped.z - spec.z) < 60) removeThug(i);
+    }
+  }
+  for (const [key, spec] of Object.entries(m.thugs ?? {})) missionThugs.set(key, spawnThug(spec.x, spec.z, spec.heading, key, false));
   if (m.weather) weather.set(m.weather);
   if (m.chapterTitle) setTimeout(() => showBanner(m.chapterTitle!), 200);
   $("#brief-title").textContent = m.title;
@@ -1459,6 +1627,8 @@ function endMission(): void {
     b.follower = null;
   }
   missionBoats.clear();
+  for (const t of missionThugs.values()) t.key = null;
+  missionThugs.clear();
   objectiveText = "";
   goalMarker.hide();
   holdMarker.hide();
@@ -1537,6 +1707,13 @@ function handleMissionEvents(events: MissionEvent[]): void {
           const b = BUSINESSES.find((q) => `raid-${q.id}` === e.mission.id);
           if (b) stateOf(save.business, b.id).raid = 0;
           extra = " · банда больше не сунется";
+        } else if (e.mission.id.startsWith("hideout-")) {
+          const id = e.mission.id.slice("hideout-".length);
+          if (!save.hideouts.includes(id)) save.hideouts.push(id);
+          if (HIDEOUTS.every((h) => save.hideouts.includes(h.id))) {
+            addMoney(ALL_HIDEOUTS_BONUS);
+            extra = ` · все притоны зачищены, бонус $${ALL_HIDEOUTS_BONUS}`;
+          } else extra = ` · притонов осталось ${HIDEOUTS.filter((h) => !save.hideouts.includes(h.id)).length}`;
         } else if (e.mission.id === "ch5-siege") {
           // The gang is finished: no more shakedowns, open ones are dropped.
           for (const b of BUSINESSES) stateOf(save.business, b.id).raid = 0;
@@ -1593,6 +1770,10 @@ function updateMissions(dt: number): void {
     for (const [key, b] of missionBoats) {
       if (b.state.sunk) destroyed.add(key);
       positions[key] = { x: b.state.x, z: b.state.z };
+    }
+    for (const [key, t] of missionThugs) {
+      if (t.ped.state === "down" || t.ped.state === "gone") destroyed.add(key);
+      positions[key] = { x: t.ped.x, z: t.ped.z };
     }
     handleMissionEvents(
       runner.update(
@@ -1841,6 +2022,7 @@ function syncMissionVisuals(dt: number): void {
     else if (mb && mb !== player.boat && !mb.state.sunk) targetArrow.show(mb.state.x, mb.state.z, color, dt);
   }
   syncBusinessMarkers(dt);
+  syncHideoutMarkers(dt);
   for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, ...cacheMarkers]) m.update(dt);
 }
 
@@ -1919,6 +2101,36 @@ function syncBusinessMarkers(dt: number): void {
       else z.hide();
       z.update(dt);
     }
+  }
+}
+
+// ---------------------------------------------------------------- gang hideouts
+
+const HIDEOUTS = hideouts(layout.n);
+const hideoutMarkers = HIDEOUTS.map((h) => ({ h, marker: new ZoneMarker(scene, 0xd63031, "Б", 5) }));
+const insideHideout: Record<string, boolean> = {};
+
+/** Hideouts show up once the player owns a gun. */
+function hideoutOpen(id: string): boolean {
+  return Object.keys(guns).length > 0 && !save.hideouts.includes(id);
+}
+
+function updateHideouts(): void {
+  const v = player.vehicle;
+  const slow = !v || speedOf(v.state) < 5;
+  const busy = runner.active || player.dead > 0 || !!player.boat;
+  for (const h of HIDEOUTS) {
+    const isIn = Math.hypot(player.x - h.at.x, player.z - h.at.z) < 5;
+    if (isIn && slow && !insideHideout[h.id] && !busy && hideoutOpen(h.id)) startMission(hideoutMission(h));
+    insideHideout[h.id] = isIn && (slow || !!insideHideout[h.id]);
+  }
+}
+
+function syncHideoutMarkers(dt: number): void {
+  for (const { h, marker } of hideoutMarkers) {
+    if (!runner.active && hideoutOpen(h.id)) marker.show(h.at.x, h.at.z);
+    else marker.hide();
+    marker.update(dt);
   }
 }
 
@@ -2336,6 +2548,7 @@ function update(dt: number, now: number): void {
       if (player.health <= 0) killPlayer();
     }
     if (input.justPressed("KeyE", "KeyF") && speedOf(v.state) < 6) exitVehicle();
+    else if (!v.state.wrecked) stepPlayerGun(dt, v);
   } else if (player.boat) {
     const b = player.boat;
     b.input.throttle = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
@@ -2388,7 +2601,7 @@ function update(dt: number, now: number): void {
         }
       }
     }
-    stepPlayerGun(dt);
+    stepPlayerGun(dt, null);
     const near = nearestEnterable();
     const boat = nearestBoat();
     if (input.justPressed("KeyE", "KeyF")) {
@@ -2435,6 +2648,7 @@ function update(dt: number, now: number): void {
     if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
     if (v.gang && v !== player.vehicle && !s.wrecked && !s.burning) {
       v.input = player.dead > 0 || player.boat ? { throttle: 0, steer: 0, brake: true, handbrake: false } : gangDrive(s, v.gang, layout, playerTarget(), dt);
+      hunterGuns(v, dt);
     }
     const prevX = s.x;
     const prevZ = s.z;
@@ -2570,9 +2784,11 @@ function update(dt: number, now: number): void {
   }
 
   stepCops(dt);
+  stepThugs(dt);
   timeScale = player.vehicle?.air.airborne && jump?.ramp ? 0.4 : 1;
   stepStreetRace(dt);
   updateBusinesses(dt);
+  updateHideouts();
   managePolice(dt);
   updateMissions(dt);
 
@@ -2758,6 +2974,14 @@ function syncVisuals(dt: number): void {
     c.vis.group.rotation.y = -p.heading + Math.PI / 2;
     animatePedestrian(c.vis, p.speed, dt, p.fall);
   }
+  for (const t of thugs) {
+    const p = t.ped;
+    t.vis.group.position.set(p.x, ground(p.x, p.z) + p.y, p.z);
+    t.vis.group.rotation.y = -p.heading + Math.PI / 2;
+    animatePedestrian(t.vis, p.speed, dt, p.fall);
+    // Gun up once they know the player is here.
+    if (t.brain.alerted && p.state !== "down") t.vis.armR.rotation.x = -Math.PI / 2;
+  }
   heli.update(dt, player.x, player.z);
   syncMissionVisuals(dt);
   applyAtmosphere(dt);
@@ -2789,7 +3013,7 @@ function updateHud(): void {
   if (player.dead > 0) hintEl.textContent = "";
   else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? k("Машина горит! E — выйти", "Машина горит! Жмите «Сесть», чтобы выйти") : "Машина горит! Тормозите и выходите";
   else if (v && v.kind === "taxi" && !runner.active) hintEl.textContent = k("J — начать смену такси", "Жмите «Работа», чтобы взять заказы");
-  else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? "E — выйти · Пробел — ручник · H — сигнал · R — радио" : "Пробел — ручник · C — камера";
+  else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? `E — выйти · Пробел — ручник · H — сигнал · R — радио${heldGun() ? " · X — огонь" : ""}` : heldGun() ? "ЛКМ или X — стрелять из окна · Пробел — ручник" : "Пробел — ручник · C — камера";
   else if (boat) {
     const docked = boatSpeed(boat.state) < 4 && landingSpot(boat) !== null;
     hintEl.textContent = docked ? k("E — сойти на берег", "Жмите «Сесть», чтобы сойти") : touch.enabled ? "" : "W/S — газ и назад · A/D — руль · сойти можно у берега";
@@ -2800,8 +3024,8 @@ function updateHud(): void {
   else if (heldGun()) hintEl.textContent = touch.enabled ? "" : "ЛКМ или X — огонь · R — перезарядка · Q — убрать";
   else hintEl.textContent = touch.enabled ? "" : "WASD — идти · Shift — бежать";
   const gun = heldGun();
-  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, !!gun);
-  weaponEl.classList.toggle("show", !!gun && !v && !boat && !player.dead);
+  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, !!gun && !boat);
+  weaponEl.classList.toggle("show", !!gun && !boat && !player.dead);
   if (gun) {
     const txt = `${gun.spec.name} · ${gun.reloading > 0 ? "перезарядка" : gun.mag} / ${gun.reserve}`;
     if (weaponEl.textContent !== txt) weaponEl.textContent = txt;
@@ -2839,6 +3063,7 @@ function updateHud(): void {
   const targets: Record<string, { x: number; z: number }> = {};
   for (const [key, mv] of missionCars) targets[key] = { x: mv.state.x, z: mv.state.z };
   for (const [key, b] of missionBoats) targets[key] = { x: b.state.x, z: b.state.z };
+  for (const [key, t] of missionThugs) targets[key] = { x: t.ped.x, z: t.ped.z };
   const goal = runner.active ? runner.objective(targets, player) : null;
   if (goal) {
     const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
@@ -2864,6 +3089,7 @@ function updateHud(): void {
       : "#74b9ff",
   }));
   for (const c of cops) dots.push({ x: c.ped.x, z: c.ped.z, color: "#3b7bff" });
+  for (const t of thugs) if (t.ped.state !== "down" && t.ped.state !== "gone") dots.push({ x: t.ped.x, z: t.ped.z, color: "#ff4757" });
   for (const b of boats) {
     if (b.state.sunk) continue;
     dots.push({ x: b.state.x, z: b.state.z, color: b === player.boat ? "#ffd32a" : b.police ? (blink ? "#ff3b3b" : "#3b7bff") : b.missionKey ? "#ff7675" : "#81ecec" });
@@ -2881,6 +3107,7 @@ function updateHud(): void {
     icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
     icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
     icons.push({ ...MARINA, color: "#00d2d3", label: "Л" });
+    for (const h of HIDEOUTS) if (hideoutOpen(h.id)) icons.push({ ...h.at, color: "#d63031", label: "Б" });
     for (const r of RAMPS) if (!save.stunts.done.includes(r.id)) icons.push({ x: r.x, z: r.z, color: "#fdcb6e", label: "Т" });
     for (const b of BUSINESSES) {
       const st = stateOf(save.business, b.id);
@@ -2990,8 +3217,12 @@ if (location.search.includes("debug")) {
     },
     cycleWeapon,
     spawnCop,
+    thugs,
+    spawnThug: (x: number, z: number, alerted = true) => spawnThug(x, z, 0, null, alerted),
+    hideouts: HIDEOUTS,
+    missionThugs,
     startMission: (id: string) => {
-      const m = [...STORY, RACE, REGATTA_M].find((x) => x.id === id);
+      const m = [...STORY, RACE, REGATTA_M, ...HIDEOUTS.map(hideoutMission)].find((x) => x.id === id);
       if (m && !runner.active) startMission(m);
     },
     perf,
