@@ -21,6 +21,8 @@ export interface WeaponSpec {
   price: number;
   /** Price of one magazine of ammo. */
   ammoPrice: number;
+  /** Story mission that must be done before the shop sells it. */
+  unlock?: string;
 }
 
 export const WEAPONS: Record<string, WeaponSpec> = {
@@ -28,7 +30,9 @@ export const WEAPONS: Record<string, WeaponSpec> = {
   smg: { id: "smg", name: "Пистолет-пулемёт", damage: 20, carDamage: 5, rate: 10, range: 38, cone: 0.3, magazine: 30, reload: 1.8, price: 3000, ammoPrice: 120 },
 };
 
-export const WEAPON_ORDER = ["pistol", "smg"];
+WEAPONS.shotgun = { id: "shotgun", name: "Дробовик", damage: 75, carDamage: 14, rate: 1.3, range: 24, cone: 0.55, magazine: 6, reload: 2.2, price: 5000, ammoPrice: 150, unlock: "ch6-finale" };
+
+export const WEAPON_ORDER = ["pistol", "smg", "shotgun"];
 
 export class Gun {
   /** Rounds in the magazine. */

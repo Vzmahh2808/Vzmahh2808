@@ -22,7 +22,7 @@ describe("chapter six", () => {
 
   it("follows chapter five, opens with a banner and is handed out by Seva", () => {
     const all = storyMissions(8);
-    expect(all.length).toBe(30);
+    expect(all.length).toBe(35);
     expect(all[25].id).toBe("ch6-arms");
     expect(all[25].chapterTitle).toBe("Глава 6: Северные");
     expect(ch).toHaveLength(5);
