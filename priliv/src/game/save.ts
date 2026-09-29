@@ -1,5 +1,6 @@
 import { RAID_EVERY, freshHoldings, type Holdings } from "./business";
 import { WEAPONS } from "./weapons";
+import { EXPORT_PRICES, type ExportState } from "./sidejobs";
 
 export const SAVE_KEY = "priliv.save";
 export const SAVE_VERSION = 1;
@@ -35,6 +36,10 @@ export interface SaveData {
   weapons: { owned: string[]; ammo: Record<string, number>; selected: string | null };
   /** Gang hideouts cleared for good. */
   hideouts: string[];
+  /** The export dock's list of cars to steal; an empty list is drawn fresh in game. */
+  export: ExportState;
+  /** Best demolition derby time in seconds. */
+  bestDerby: number | null;
 }
 
 export interface KeyValueStore {
@@ -60,6 +65,8 @@ export function freshSave(): SaveData {
     stunts: { done: [], best: 0 },
     weapons: { owned: [], ammo: {}, selected: null },
     hideouts: [],
+    export: { wanted: [], delivered: [], total: 0 },
+    bestDerby: null,
   };
 }
 
@@ -76,6 +83,17 @@ function parseWeapons(raw: unknown): SaveData["weapons"] {
   }
   if (typeof data.selected === "string" && w.owned.includes(data.selected)) w.selected = data.selected;
   return w;
+}
+
+function parseExport(raw: unknown): ExportState {
+  const e: ExportState = { wanted: [], delivered: [], total: 0 };
+  if (!raw || typeof raw !== "object") return e;
+  const data = raw as { wanted?: unknown; delivered?: unknown; total?: unknown };
+  const kinds = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === "string" && k in EXPORT_PRICES))] : []);
+  e.wanted = kinds(data.wanted);
+  e.delivered = kinds(data.delivered).filter((k) => e.wanted.includes(k));
+  e.total = typeof data.total === "number" && data.total > 0 ? Math.floor(data.total) : 0;
+  return e;
 }
 
 function parseHoldings(raw: unknown): Holdings {
@@ -144,6 +162,8 @@ export function parseSave(raw: string | null): SaveData | null {
     },
     business: parseHoldings(data.business),
     weapons: parseWeapons(data.weapons),
+    export: parseExport(data.export),
+    bestDerby: typeof data.bestDerby === "number" && data.bestDerby > 0 ? data.bestDerby : null,
     hideouts: Array.isArray(data.hideouts) ? [...new Set(data.hideouts.filter((h): h is string => typeof h === "string"))] : [],
     stunts: {
       done: Array.isArray(data.stunts?.done) ? [...new Set(data.stunts.done.filter((d): d is string => typeof d === "string"))] : [],
