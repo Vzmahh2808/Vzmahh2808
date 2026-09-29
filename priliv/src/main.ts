@@ -40,6 +40,7 @@ import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boa
 import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapons";
 import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
 import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
+import { CARGO_POINTS, EXPORT_NAMES, deliverExport, derbyMission, exportDock, exportList, exportRemaining, makeBoatRun } from "./game/sidejobs";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
 const $ = <T extends HTMLElement>(s: string) => document.querySelector<T>(s)!;
@@ -834,6 +835,8 @@ function setPaused(on: boolean): void {
       `<dt>Лучшая регата</dt><dd>${save.bestRegatta ? save.bestRegatta.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Победы в гонках</dt><dd>${save.stats.racesWon}</dd>` +
       `<dt>Трюки</dt><dd>${save.stunts.done.length} из ${RAMPS.length}${save.stunts.best ? ` · рекорд ${save.stunts.best}` : ""}</dd>` +
+      `<dt>Экспорт</dt><dd>сдано ${save.export.total} · ищут: ${exportWanted()}</dd>` +
+      `<dt>Дерби</dt><dd>${save.bestDerby ? "рекорд " + save.bestDerby.toFixed(1) + " с" : "—"}</dd>` +
       `<dt>Бизнесы</dt><dd>${BUSINESSES.filter((b) => stateOf(save.business, b.id).owned).length} из ${BUSINESSES.length} · $${hourlyIncome(save.business, BUSINESSES)}/ч</dd>` +
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
@@ -1540,6 +1543,10 @@ const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5);
 const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
 const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4);
 const depotMarker = new ZoneMarker(scene, 0xe1b12c, "Д", 5);
+const exportMarker = new ZoneMarker(scene, 0x00b894, "Э", 6);
+const EXPORT_AT = exportDock(layout.n);
+exportMarker.show(EXPORT_AT.x, EXPORT_AT.z);
+if (save.export.wanted.length === 0) save.export.wanted = exportList(rng);
 const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6);
 const holdMarker = new ZoneMarker(scene, 0xff6b81, "⚑", 16);
 /** One marker per cache in a collect step. */
@@ -1551,7 +1558,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, export: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -1581,6 +1588,11 @@ function startMission(m: Mission): void {
       v.input = v.ai.input;
     }
     if (spec.hostile) v.gang = makeUnit("pursuit");
+    if (spec.unarmed && v.gang) {
+      // Rams only: no shots from the window, nobody jumps out.
+      v.gunTimer = Infinity;
+      v.gang.copOut = true;
+    }
     v.missionKey = key;
     missionCars.set(key, v);
   }
@@ -1734,7 +1746,11 @@ function handleMissionEvents(events: MissionEvent[]): void {
           for (const b of BUSINESSES) stateOf(save.business, b.id).raid = 0;
           extra = " · банда разбита, наездов больше не будет";
           if (!save.missionsDone.includes(e.mission.id)) save.missionsDone.push(e.mission.id);
-        } else if (e.mission.id !== "courier" && !save.missionsDone.includes(e.mission.id)) {
+        } else if (e.mission.id === "derby") {
+          const best = save.bestDerby === null || e.time < save.bestDerby;
+          if (best) save.bestDerby = e.time;
+          extra = ` · ${e.time.toFixed(1)} с${best ? " — рекорд!" : ""}`;
+        } else if (STORY.some((m) => m.id === e.mission.id) && !save.missionsDone.includes(e.mission.id)) {
           save.missionsDone.push(e.mission.id);
         }
         persist();
@@ -1840,13 +1856,45 @@ function updateMissions(dt: number): void {
   }
   if (v && !runner.active && v.kind === "taxi" && input.justPressed("KeyJ")) startTaxiShift();
   if (taxi && runner.active && runner.mission?.id === "taxi" && (!v || v.kind !== "taxi")) failMission("вы вышли из такси");
-  if (runner.mission?.id === REGATTA_M.id && !player.boat) failMission("вы покинули катер");
+  if ((runner.mission?.id === REGATTA_M.id || runner.mission?.id === "boat-cargo") && !player.boat) failMission("вы покинули катер");
+  if (entered("export", EXPORT_AT.x, EXPORT_AT.z, 6, !player.boat && (!v || speedOf(v.state) < 3))) visitExport(v);
 
   autosaveTimer -= dt;
   if (autosaveTimer <= 0) {
     autosaveTimer = 20;
     persist();
   }
+}
+
+// ---------------------------------------------------------------- export dock
+
+function exportWanted(): string {
+  return exportRemaining(save.export).map((k2) => EXPORT_NAMES[k2]).join(", ");
+}
+
+/** Drive a car on the list into the export zone to sell it; walk in to read the list. */
+function visitExport(v: Vehicle | null): void {
+  if (!v) {
+    showBanner(`Экспорт ищет: ${exportWanted()}`);
+    return;
+  }
+  if (v.missionKey || v.garaged) {
+    showBanner("Эту машину не возьмут. Нужна угнанная");
+    return;
+  }
+  const kind = v.kind;
+  const res = deliverExport(save.export, kind, v.state.health, rng);
+  if (!res.ok) {
+    showBanner(res.reason === "already" ? `Эту модель уже сдали. Ищут: ${exportWanted()}` : `Такая не нужна. Ищут: ${exportWanted()}`);
+    return;
+  }
+  exitVehicle();
+  // The crane takes the car away; the slot comes back as ordinary traffic elsewhere.
+  recycleAsTraffic(v);
+  addMoney(res.pay + res.bonus);
+  audio.alert();
+  persist();
+  showBanner(res.listDone ? `Список закрыт! +$${res.pay} и бонус $${res.bonus}. Новый заказ: ${exportWanted()}` : `Сдано: ${EXPORT_NAMES[kind]} · +$${res.pay}. Осталось: ${exportWanted()}`);
 }
 
 // ---------------------------------------------------------------- jobs, shop, workshop
@@ -2038,7 +2086,7 @@ function syncMissionVisuals(dt: number): void {
   }
   syncBusinessMarkers(dt);
   syncHideoutMarkers(dt);
-  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, exportMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- businesses
@@ -2247,6 +2295,14 @@ function openRegattaMenu(): void {
         if (player.boat && !runner.active) startMission(REGATTA_M);
       },
     },
+    {
+      label: "Груз по воде",
+      note: "забрать ящики с буя и довезти по назначению",
+      action: () => {
+        closeMenu();
+        if (player.boat && !runner.active) startMission(makeBoatRun(rng, CARGO_POINTS, { x: player.x, z: player.z }));
+      },
+    },
   ]);
 }
 
@@ -2259,6 +2315,14 @@ function openRaceMenu(): void {
       action: () => {
         closeMenu();
         startMission(RACE);
+      },
+    },
+    {
+      label: "Дерби на выживание",
+      note: `четыре пикапа идут на таран, рекорд ${save.bestDerby ? save.bestDerby.toFixed(1) + " с" : "не установлен"}`,
+      action: () => {
+        closeMenu();
+        if (player.vehicle && !runner.active) startMission(derbyMission(layout.n, PLACES.race));
       },
     },
     ...TRACKS.map((t) => ({
@@ -3115,6 +3179,7 @@ function updateHud(): void {
     { ...PLACES.paint, color: "#48dbfb", label: "П" },
     { ...PLACES.shop, color: "#c56cf0", label: "А" },
     { ...PLACES.gunShop, color: "#e17055", label: "О" },
+    { ...EXPORT_AT, color: "#00b894", label: "Э" },
   ];
   if (!runner.active) {
     const next = nextStory();
@@ -3236,6 +3301,9 @@ if (location.search.includes("debug")) {
     spawnThug: (x: number, z: number, alerted = true) => spawnThug(x, z, 0, null, alerted),
     hideouts: HIDEOUTS,
     missionThugs,
+    exportAt: EXPORT_AT,
+    startDerby: () => player.vehicle && !runner.active && startMission(derbyMission(layout.n, PLACES.race)),
+    startCargo: () => player.boat && !runner.active && startMission(makeBoatRun(rng, CARGO_POINTS, { x: player.x, z: player.z })),
     startMission: (id: string) => {
       const m = [...STORY, RACE, REGATTA_M, ...HIDEOUTS.map(hideoutMission)].find((x) => x.id === id);
       if (m && !runner.active) startMission(m);

@@ -15,6 +15,8 @@ export interface SpawnSpec {
   drives: boolean;
   /** A gang hunter: chases and rams the player instead of driving as traffic. */
   hostile?: boolean;
+  /** A hunter that only rams: no shooting, nobody jumps out. */
+  unarmed?: boolean;
 }
 
 /** A boat a mission puts on the water; with a route it sails it, fleeing from the player. */
