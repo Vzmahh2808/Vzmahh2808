@@ -206,6 +206,25 @@ export class CarAudio {
     this.burst(0.18, 500, 0.35);
   }
 
+  /** A short bright two-note chime for picking up money. */
+  coin(): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    for (const [i, f] of [988, 1319].entries()) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + i * 0.07);
+      g.gain.exponentialRampToValueAtTime(0.08, t + i * 0.07 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.07 + 0.16);
+      o.connect(g).connect(this.master);
+      o.start(t + i * 0.07);
+      o.stop(t + i * 0.07 + 0.2);
+    }
+  }
+
   ignite(): void {
     this.burst(0.7, 1500, 0.25);
   }

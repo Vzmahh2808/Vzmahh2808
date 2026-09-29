@@ -198,3 +198,22 @@ body.touch #offer { bottom: auto; top: 40%; font-size: 13px; }
 body.underground #view { filter: brightness(0.45) saturate(0.7); }
 body.touch #touch .dig { display: none; }
 body.touch #touch.digger .dig { display: block; background: rgba(160,105,46,0.9); border-color: transparent; }
+
+/* Full-screen map. */
+#bigmap { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; background: rgba(6,8,12,0.92); padding: 12px; gap: 8px; }
+#bigmap.hidden { display: none; }
+#bigmap canvas { flex: 1; min-height: 0; width: 100%; cursor: crosshair; touch-action: manipulation; }
+#bigmap .map-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 13px; color: #b7bfcc; }
+#bigmap .map-head b { color: #ffd32a; font-size: 20px; }
+#bigmap .map-head span { flex: 1 1 260px; }
+#bigmap button { font: inherit; font-weight: 700; padding: 8px 14px; border: none; border-radius: 8px; background: #ffd32a; color: #141826; cursor: pointer; }
+#bigmap button.secondary { background: #2a3145; color: #eef1f6; font-weight: 400; }
+#bigmap .map-foot { font-size: 12px; color: #8a92a8; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+#bigmap .map-foot i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: -6px; }
+
+/* "Try the job again" card, sitting above the ad offer. */
+#retry { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 5; display: none; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; background: rgba(10,12,18,0.9); border: 1px solid #ff6b6b; border-radius: 12px; font-size: 15px; white-space: nowrap; }
+#retry.show { display: flex; }
+#retry button { font: inherit; font-weight: 700; padding: 8px 12px; border: none; border-radius: 8px; background: #ffd32a; color: #141826; cursor: pointer; }
+#retry button.secondary { background: rgba(255,255,255,0.12); color: #eef1f6; font-weight: 400; }
+body.touch #retry { bottom: auto; top: 30%; font-size: 13px; }
