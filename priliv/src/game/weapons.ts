@@ -23,6 +23,8 @@ export interface WeaponSpec {
   ammoPrice: number;
   /** Story mission that must be done before the shop sells it. */
   unlock?: string;
+  /** Hits things within `range` metres instead of firing; needs no ammo. */
+  melee?: boolean;
 }
 
 export const WEAPONS: Record<string, WeaponSpec> = {
@@ -32,7 +34,18 @@ export const WEAPONS: Record<string, WeaponSpec> = {
 
 WEAPONS.shotgun = { id: "shotgun", name: "Дробовик", damage: 75, carDamage: 14, rate: 1.3, range: 24, cone: 0.55, magazine: 6, reload: 2.2, price: 5000, ammoPrice: 150, unlock: "ch6-finale" };
 
-export const WEAPON_ORDER = ["pistol", "smg", "shotgun"];
+/** Bare fists: what the player fights with when nothing is in hand. */
+export const FISTS: WeaponSpec = { id: "fists", name: "Кулаки", damage: 20, carDamage: 0, rate: 2.2, range: 1.7, cone: 1.0, magazine: 0, reload: 0, price: 0, ammoPrice: 0, melee: true };
+
+/** A shovel hits harder and reaches further, and it also digs a hiding hole. */
+WEAPONS.shovel = { id: "shovel", name: "Лопата", damage: 45, carDamage: 0, rate: 1.5, range: 2.1, cone: 1.1, magazine: 0, reload: 0, price: 150, ammoPrice: 0, melee: true };
+
+export const WEAPON_ORDER = ["shovel", "pistol", "smg", "shotgun"];
+
+/** Seconds between melee swings. */
+export function swingInterval(spec: WeaponSpec): number {
+  return 1 / spec.rate;
+}
 
 export class Gun {
   /** Rounds in the magazine. */

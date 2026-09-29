@@ -34,6 +34,13 @@ export interface Lamp {
   rot: number;
 }
 
+/** A thin solid such as a lamp post or a tree trunk: a circle on the ground. */
+export interface Post {
+  x: number;
+  z: number;
+  r: number;
+}
+
 export interface Intersection {
   ix: number;
   iz: number;
@@ -47,6 +54,8 @@ export interface CityLayout {
   buildings: Building[];
   trees: Tree[];
   lamps: Lamp[];
+  /** Lamp posts and tree trunks, solid for cars and the player. */
+  posts: Post[];
   intersections: Intersection[];
   /** Spawn positions for parked cars: on the right sidewalk edge of streets. */
   parking: Array<{ x: number; z: number; rot: number }>;
@@ -160,7 +169,62 @@ export function generateCity(rng: Rng, n = 8): CityLayout {
     }
   }
 
-  return { n, half, buildings, trees, lamps, intersections, parking };
+  const posts: Post[] = [...lamps.map((l) => ({ x: l.x, z: l.z, r: LAMP_RADIUS })), ...trees.map((t) => ({ x: t.x, z: t.z, r: TRUNK_RADIUS * t.scale }))];
+  return { n, half, buildings, trees, lamps, posts, intersections, parking };
+}
+
+export const LAMP_RADIUS = 0.3;
+export const TRUNK_RADIUS = 0.4;
+
+const POST_CELL = 16;
+const postGrids = new WeakMap<Post[], Map<number, Post[]>>();
+
+function cellKey(cx: number, cz: number): number {
+  return (cx + 512) * 1024 + (cz + 512);
+}
+
+function postGrid(posts: Post[]): Map<number, Post[]> {
+  let g = postGrids.get(posts);
+  if (!g) {
+    g = new Map();
+    for (const p of posts) {
+      const k = cellKey(Math.floor(p.x / POST_CELL), Math.floor(p.z / POST_CELL));
+      const cell = g.get(k);
+      if (cell) cell.push(p);
+      else g.set(k, [p]);
+    }
+    postGrids.set(posts, g);
+  }
+  return g;
+}
+
+/** Push-out vector for a circle overlapping lamp posts or tree trunks, or null. */
+export function resolveCircleVsPosts(layout: CityLayout, x: number, z: number, r: number): { x: number; z: number } | null {
+  const g = postGrid(layout.posts);
+  const cx = Math.floor(x / POST_CELL);
+  const cz = Math.floor(z / POST_CELL);
+  let px = 0;
+  let pz = 0;
+  let hit = false;
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const cell = g.get(cellKey(cx + i, cz + j));
+      if (!cell) continue;
+      for (const p of cell) {
+        const dx = x - p.x;
+        const dz = z - p.z;
+        const min = p.r + r;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= min * min) continue;
+        hit = true;
+        const d = Math.sqrt(d2) || 0.001;
+        const push = min - d;
+        px += (dx / d) * push;
+        pz += (dz / d) * push;
+      }
+    }
+  }
+  return hit ? { x: px, z: pz } : null;
 }
 
 /** Axis-aligned collision test of a circle against buildings; returns push-out vector or null. */

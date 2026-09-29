@@ -35,7 +35,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 #wanted.pulse { animation: starpulse 0.6s ease-out; }
 @keyframes starblink { 50% { color: rgba(255,211,42,0.25); } }
 @keyframes starpulse { 0% { transform: scale(1.5); } 100% { transform: scale(1); } }
-#banner { left: 50%; top: 22%; transform: translateX(-50%); font-size: 26px; font-weight: 800; letter-spacing: 0.04em; color: #7bed9f; text-shadow: 0 3px 16px rgba(0,0,0,0.8); opacity: 0; transition: opacity 0.4s; white-space: nowrap; }
+#banner { left: 50%; top: 22%; transform: translateX(-50%); font-size: 26px; font-weight: 800; letter-spacing: 0.04em; color: #7bed9f; text-shadow: 0 3px 16px rgba(0,0,0,0.8); opacity: 0; transition: opacity 0.4s; width: max-content; max-width: 90vw; text-align: center; }
 #banner.show { opacity: 1; }
 #money { right: 20px; top: 68px; font-family: var(--mono); font-size: 22px; font-weight: 700; color: #7bed9f; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
 #money.pulse { animation: starpulse 0.6s ease-out; }
@@ -55,8 +55,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; col
 #pause.hidden { display: none; }
 #pause .card { width: min(420px, 92vw); padding: 24px 28px; background: #141826; border: 1px solid #2a3145; border-radius: 14px; }
 #pause h1 { margin: 0 0 12px; color: #ffd32a; font-size: 26px; }
-#pause dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; margin: 0 0 16px; font-size: 14px; }
-#pause dt { color: #8a92a8; }
+#pause dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0 0 16px; font-size: 14px; }
+#pause dt { color: #8a92a8; white-space: nowrap; }
 #pause dd { margin: 0; font-family: var(--mono); text-align: right; }
 .start-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .start-buttons button { margin-top: 0; font: inherit; font-size: 15px; padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer; font-weight: 700; background: #ffd32a; color: #141826; }
@@ -182,3 +182,19 @@ body.touch #touch.armed .gun { display: block; background: rgba(225,112,85,0.85)
 #offer button { font: inherit; font-weight: 700; padding: 8px 12px; border: none; border-radius: 8px; background: #ffd32a; color: #141826; cursor: pointer; }
 #offer button.secondary { background: rgba(255,255,255,0.12); color: #eef1f6; font-weight: 400; }
 body.touch #offer { bottom: auto; top: 40%; font-size: 13px; }
+
+/* Pause menu: what the rings and icons mean. */
+#legend { margin: 0 0 16px; font-size: 13px; line-height: 1.45; color: #b7bfcc; }
+#legend p { margin: 0 0 10px; }
+#legend ul { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
+#legend li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; }
+#legend i { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; font-style: normal; font-weight: 700; font-size: 13px; color: #141826; }
+
+/* Digging a hiding hole, and the air left underground. */
+#dig { left: 50%; top: 34%; transform: translateX(-50%); width: 220px; height: 10px; background: rgba(0,0,0,0.5); border-radius: 5px; overflow: hidden; display: none; }
+#dig.show { display: block; }
+#dig div { height: 100%; width: 0; background: linear-gradient(90deg, #a0692e, #e0a458); }
+#dig.air div { background: linear-gradient(90deg, #ff6b6b, #74b9ff); }
+body.underground #view { filter: brightness(0.45) saturate(0.7); }
+body.touch #touch .dig { display: none; }
+body.touch #touch.digger .dig { display: block; background: rgba(160,105,46,0.9); border-color: transparent; }

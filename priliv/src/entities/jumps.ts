@@ -105,3 +105,33 @@ export function landingDamage(impact: number, misaligned: boolean): number {
   const base = impact < 9 ? 0 : (impact - 9) * 4;
   return misaligned ? base + 15 : base;
 }
+
+/**
+ * Push-out for something on foot that walks into a ramp: to a pedestrian a
+ * ramp is a solid block. Cars are meant to drive up it, so they skip this.
+ */
+export function resolveCircleVsRamps(ramps: Ramp[], x: number, z: number, r: number): { x: number; z: number } | null {
+  let px = 0;
+  let pz = 0;
+  let hit = false;
+  for (const ramp of ramps) {
+    const fx = Math.cos(ramp.heading);
+    const fz = Math.sin(ramp.heading);
+    const dx = x - ramp.x;
+    const dz = z - ramp.z;
+    const u = dx * fx + dz * fz - ramp.length / 2;
+    const v = -dx * fz + dz * fx;
+    const hu = ramp.length / 2 + r;
+    const hv = ramp.width / 2 + r;
+    if (Math.abs(u) >= hu || Math.abs(v) >= hv) continue;
+    hit = true;
+    const ou = hu - Math.abs(u);
+    const ov = hv - Math.abs(v);
+    // Leave through the nearer side.
+    const lu = ou < ov ? Math.sign(u || 1) * ou : 0;
+    const lv = ou < ov ? 0 : Math.sign(v || 1) * ov;
+    px += lu * fx - lv * fz;
+    pz += lu * fz + lv * fx;
+  }
+  return hit ? { x: px, z: pz } : null;
+}

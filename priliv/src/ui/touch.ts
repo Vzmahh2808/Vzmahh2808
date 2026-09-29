@@ -129,10 +129,13 @@ export class TouchControls {
   }
 
   /** Show the buttons that matter right now. */
-  setMode(inCar: boolean, canEnter: boolean, taxi = false, armed = false): void {
+  setMode(inCar: boolean, canEnter: boolean, taxi = false, attackLabel: string | null = null, digger = false): void {
     if (!this.enabled) return;
     this.root.classList.toggle("taxi", taxi);
-    this.root.classList.toggle("armed", armed);
+    this.root.classList.toggle("armed", attackLabel !== null);
+    this.root.classList.toggle("digger", digger);
+    const fire = this.root.querySelector<HTMLElement>(".gun");
+    if (fire && attackLabel && fire.textContent !== attackLabel) fire.textContent = attackLabel;
     this.root.classList.toggle("in-car", inCar);
     this.root.classList.toggle("can-enter", canEnter || inCar);
     const enter = this.root.querySelector<HTMLElement>(".enter");
