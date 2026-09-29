@@ -40,6 +40,7 @@ import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boa
 import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapons";
 import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
 import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
+import { platform } from "./platform";
 import { CARGO_POINTS, EXPORT_NAMES, deliverExport, derbyMission, exportDock, exportList, exportRemaining, makeBoatRun } from "./game/sidejobs";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
@@ -318,10 +319,23 @@ function syncWeaponSave(): void {
   save.weapons.selected = weaponId;
 }
 
+/** Cloud copies are rate-limited: at most one every 20 s, plus one when the page is hidden. */
+const CLOUD_EVERY = 20_000;
+let cloudPending: string | null = null;
+let cloudLast = 0;
+
+function flushCloud(force = false): void {
+  if (!cloudPending || (!force && performance.now() - cloudLast < CLOUD_EVERY)) return;
+  platform().cloudSave(cloudPending);
+  cloudPending = null;
+  cloudLast = performance.now();
+}
+
 function persist(): void {
   syncWeaponSave();
   save.clock = wrapHour(clock);
-  writeSave(save);
+  cloudPending = writeSave(save);
+  flushCloud();
 }
 
 /** Car specs with grip scaled for wet roads; rebuilt when the road wetness changes. */
@@ -841,6 +855,7 @@ function setPaused(on: boolean): void {
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
     $("#btn-new").textContent = "Новая игра";
+    syncAdButton();
     audio.engine(0, 0, false, 1);
     audio.siren(Infinity, 0);
     audio.screech(0);
@@ -855,6 +870,49 @@ $("#btn-quality").addEventListener("click", () => {
   persist();
   applyQuality();
 });
+/** Rewarded ad in the pause menu, where the platform has ads. */
+const AD_REWARD = 500;
+const AD_COOLDOWN = 180_000;
+let adReadyAt = 0;
+const adBtn = $<HTMLButtonElement>("#btn-ad");
+function syncAdButton(): void {
+  const can = !!platform().rewarded;
+  adBtn.hidden = !can;
+  if (!can) return;
+  const wait = Math.ceil((adReadyAt - performance.now()) / 1000);
+  adBtn.disabled = wait > 0;
+  adBtn.textContent = wait > 0 ? `Бонус через ${Math.ceil(wait / 60)} мин` : `+$${AD_REWARD} за рекламу`;
+}
+adBtn.addEventListener("click", async () => {
+  const show = platform().rewarded;
+  if (!show || performance.now() < adReadyAt) return;
+  adBtn.disabled = true;
+  // Silence the game while the ad plays.
+  audio.muted = true;
+  const got = await show();
+  audio.muted = save.muted;
+  adReadyAt = performance.now() + AD_COOLDOWN;
+  if (got) {
+    addMoney(AD_REWARD);
+    persist();
+    showBanner(`Бонус: +$${AD_REWARD}`);
+  }
+  syncAdButton();
+});
+
+// A hidden tab or a minimised Mini App pauses the game and pushes the save to the cloud.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden || !started) return;
+  if (!paused) setPaused(true);
+  // A Mini App is often closed straight from here, so save now.
+  persist();
+  flushCloud(true);
+});
+window.addEventListener("pagehide", () => {
+  if (started) persist();
+  flushCloud(true);
+});
+
 $("#btn-sound").addEventListener("click", () => {
   audio.muted = !audio.muted;
   save.muted = audio.muted;
@@ -3210,7 +3268,15 @@ let fpsFrames = 0;
 const FIXED = 1 / 60;
 let accumulator = 0;
 
+let wasPlaying = false;
+
 function frame(now: number): void {
+  // Yandex wants to know when the player is actually playing, not in menus.
+  const playing = started && !paused;
+  if (playing !== wasPlaying) {
+    wasPlaying = playing;
+    platform().gameplay(playing);
+  }
   const raw = (now - last) / 1000;
   const dt = Math.min(0.1, raw);
   last = now;

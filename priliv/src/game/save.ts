@@ -40,6 +40,8 @@ export interface SaveData {
   export: ExportState;
   /** Best demolition derby time in seconds. */
   bestDerby: number | null;
+  /** Wall-clock time of the last write, to pick the newer of a local and a cloud save. */
+  savedAt: number;
 }
 
 export interface KeyValueStore {
@@ -67,6 +69,7 @@ export function freshSave(): SaveData {
     hideouts: [],
     export: { wanted: [], delivered: [], total: 0 },
     bestDerby: null,
+    savedAt: 0,
   };
 }
 
@@ -164,6 +167,7 @@ export function parseSave(raw: string | null): SaveData | null {
     weapons: parseWeapons(data.weapons),
     export: parseExport(data.export),
     bestDerby: typeof data.bestDerby === "number" && data.bestDerby > 0 ? data.bestDerby : null,
+    savedAt: typeof data.savedAt === "number" && data.savedAt > 0 ? data.savedAt : 0,
     hideouts: Array.isArray(data.hideouts) ? [...new Set(data.hideouts.filter((h): h is string => typeof h === "string"))] : [],
     stunts: {
       done: Array.isArray(data.stunts?.done) ? [...new Set(data.stunts.done.filter((d): d is string => typeof d === "string"))] : [],
@@ -180,12 +184,16 @@ export function loadSave(store: KeyValueStore | null = defaultStore()): SaveData
   }
 }
 
-export function writeSave(data: SaveData, store: KeyValueStore | null = defaultStore()): void {
+/** Stamp and store the save; returns the JSON written, for a cloud copy. */
+export function writeSave(data: SaveData, store: KeyValueStore | null = defaultStore(), now = Date.now()): string {
+  data.savedAt = now;
+  const raw = JSON.stringify(data);
   try {
-    store?.setItem(SAVE_KEY, JSON.stringify(data));
+    store?.setItem(SAVE_KEY, raw);
   } catch {
     /* storage full or blocked: the game keeps running without persistence */
   }
+  return raw;
 }
 
 export function clearSave(store: KeyValueStore | null = defaultStore()): void {
