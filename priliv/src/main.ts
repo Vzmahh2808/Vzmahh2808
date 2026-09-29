@@ -41,6 +41,7 @@ import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapon
 import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
 import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
 import { platform } from "./platform";
+import { AdPolicy, FpsWatch, OFFER_TIME, doubleBonus, revivable } from "./game/ads";
 import { CARGO_POINTS, EXPORT_NAMES, deliverExport, derbyMission, exportDock, exportList, exportRemaining, makeBoatRun } from "./game/sidejobs";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
 
@@ -815,9 +816,13 @@ const touch = new TouchControls(input, location.search.includes("touch"));
 const k = (keys: string, tap: string) => (touch.enabled ? tap : keys);
 
 let lowQuality = false;
+/** Set when "auto" quality saw the game run too slowly on this device. */
+let autoLow = false;
+const fpsWatch = new FpsWatch();
+
 function applyQuality(): void {
   const pref = save.quality;
-  lowQuality = pref === "low" || (pref === "auto" && isTouchDevice());
+  lowQuality = pref === "low" || (pref === "auto" && (isTouchDevice() || autoLow));
   renderer.setPixelRatio(lowQuality ? 1 : Math.min(window.devicePixelRatio, 2));
   const size = lowQuality ? 1024 : 2048;
   if (sun.shadow.mapSize.x !== size) {
@@ -883,14 +888,77 @@ function syncAdButton(): void {
   adBtn.disabled = wait > 0;
   adBtn.textContent = wait > 0 ? `Бонус через ${Math.ceil(wait / 60)} мин` : `+$${AD_REWARD} за рекламу`;
 }
-adBtn.addEventListener("click", async () => {
-  const show = platform().rewarded;
-  if (!show || performance.now() < adReadyAt) return;
-  adBtn.disabled = true;
-  // Silence the game while the ad plays.
+const ads = new AdPolicy();
+const sessionTime = () => performance.now() / 1000;
+let adPlaying = false;
+
+/**
+ * Show an ad with the game frozen and silent. Resolves true when a rewarded ad
+ * was watched to the end (always false for a full-screen one).
+ */
+async function playAd(kind: "rewarded" | "interstitial"): Promise<boolean> {
+  const p = platform();
+  const show = kind === "rewarded" ? p.rewarded : p.interstitial;
+  if (!show || adPlaying) return false;
+  adPlaying = true;
+  const wasPaused = paused;
+  paused = true;
   audio.muted = true;
-  const got = await show();
-  audio.muted = save.muted;
+  radio.update(false);
+  let got = false;
+  try {
+    got = (await show()) === true;
+  } finally {
+    audio.muted = save.muted;
+    paused = wasPaused;
+    input.endFrame();
+    adPlaying = false;
+    ads.noteAd(sessionTime());
+  }
+  return got;
+}
+
+/** A full-screen ad at a natural break, if enough time has passed. */
+function maybeInterstitial(): void {
+  if (!platform().interstitial || !ads.interstitialAllowed(sessionTime())) return;
+  void playAd("interstitial");
+}
+
+// ---- offers: a short-lived "watch an ad for ..." card
+
+const offerEl = $<HTMLDivElement>("#offer");
+let offerTimer: ReturnType<typeof setTimeout> | null = null;
+let offerAction: (() => void) | null = null;
+
+function hideOffer(): void {
+  offerEl.classList.remove("show");
+  offerAction = null;
+  if (offerTimer) clearTimeout(offerTimer);
+  offerTimer = null;
+}
+
+/** Offer something for a rewarded ad; does nothing where there are no ads. */
+function showOffer(text: string, button: string, onReward: () => void, seconds = OFFER_TIME): void {
+  if (!platform().rewarded) return;
+  hideOffer();
+  offerEl.querySelector("span")!.textContent = text;
+  offerEl.querySelector<HTMLButtonElement>("[data-offer-yes]")!.textContent = button;
+  offerAction = onReward;
+  offerEl.classList.add("show");
+  offerTimer = setTimeout(hideOffer, seconds * 1000);
+}
+
+offerEl.querySelector("[data-offer-yes]")!.addEventListener("click", async () => {
+  const act = offerAction;
+  hideOffer();
+  if (act && (await playAd("rewarded"))) act();
+});
+offerEl.querySelector("[data-offer-no]")!.addEventListener("click", hideOffer);
+
+adBtn.addEventListener("click", async () => {
+  if (!platform().rewarded || performance.now() < adReadyAt) return;
+  adBtn.disabled = true;
+  const got = await playAd("rewarded");
   adReadyAt = performance.now() + AD_COOLDOWN;
   if (got) {
     addMoney(AD_REWARD);
@@ -1079,18 +1147,50 @@ function showBanner(text: string): void {
   banner = { text, ttl: 3.5 };
 }
 
+/** A death waiting on the "continue here" offer; the hospital comes only if it is declined. */
+let pendingDeath = false;
+
 function killPlayer(title = "Вы погибли"): void {
   if (player.dead > 0) return;
   player.dead = 3.5;
   player.health = 0;
+  save.stats.deaths++;
+  if (platform().rewarded && revivable(title)) {
+    // Hold the mission and the police while the player decides.
+    pendingDeath = true;
+    player.dead = OFFER_TIME + 0.5;
+    persist();
+    showOverlay(title, "Можно продолжить с этого места");
+    showOffer("Продолжить здесь, без больницы", "Смотреть рекламу", revivePlayer);
+    return;
+  }
+  hospital(title);
+}
+
+/** Death for real: mission lost, wanted cleared, hospital fee. */
+function hospital(title: string | null): void {
+  pendingDeath = false;
   wanted.clear();
   standDown();
   failMission("вы погибли");
   const fee = Math.min(save.money, 100);
   save.money -= fee;
-  save.stats.deaths++;
   persist();
-  showOverlay(title, fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
+  if (title) showOverlay(title, fee > 0 ? `Больница: −$${fee}` : "Возвращение домой…");
+  else if (fee > 0) showBanner(`Больница: −$${fee}`);
+}
+
+/** Watched the ad: back on your feet where you fell, mission and all. */
+function revivePlayer(): void {
+  if (!pendingDeath || player.dead <= 0) return;
+  pendingDeath = false;
+  player.dead = 0;
+  player.health = 100;
+  const v = player.vehicle;
+  if (v && (v.state.wrecked || v.state.burning)) exitVehicle();
+  if (!player.vehicle && !player.boat) playerVis.group.visible = true;
+  deathEl.classList.remove("show");
+  showBanner("Снова в деле");
 }
 
 /** Test switches, only reachable through the ?debug hook. */
@@ -1122,6 +1222,11 @@ function arrestPlayer(): void {
 }
 
 function respawnPlayer(): void {
+  // The offer ran out: now it is the hospital after all.
+  if (pendingDeath) {
+    hideOffer();
+    hospital(null);
+  }
   if (player.vehicle) {
     player.vehicle.input = { throttle: 0, steer: 0, brake: false, handbrake: true };
   }
@@ -1135,6 +1240,7 @@ function respawnPlayer(): void {
   placeAtStart();
   camPos.set(player.x - 6, 4, player.z);
   deathEl.classList.remove("show");
+  maybeInterstitial();
 }
 
 function explode(x: number, z: number, source: Vehicle | null): void {
@@ -1814,6 +1920,14 @@ function handleMissionEvents(events: MissionEvent[]): void {
         persist();
         endMission();
         showBanner(`Миссия выполнена: +$${e.reward}${extra}`);
+        const bonus = doubleBonus(e.mission.id, e.reward);
+        if (bonus > 0) {
+          showOffer(`Удвоить награду: +$${bonus}`, "Смотреть рекламу", () => {
+            addMoney(bonus);
+            persist();
+            showBanner(`Награда удвоена: +$${bonus}`);
+          });
+        }
         if (!nextStory() && STORY.some((m) => m.id === e.mission.id)) setTimeout(() => showBanner("Сюжет пройден. Город ваш."), 4000);
         break;
       }
@@ -1829,6 +1943,8 @@ function handleMissionEvents(events: MissionEvent[]): void {
         endMission();
         if (taxi) endTaxiShift(e.reason);
         else showBanner(`Провал: ${e.reason}`);
+        // A failed job is a natural break; a death gets its ad at the respawn instead.
+        if (player.dead <= 0) maybeInterstitial();
         break;
       }
       default:
@@ -2084,6 +2200,22 @@ function openWorkshop(v: Vehicle): void {
         showBanner(hidden ? "Новый цвет. Полиция вас потеряла" : wanted.level > 0 ? "Отремонтировано, но полиция всё видела" : "Машина как новая");
       },
     },
+    ...(platform().rewarded
+      ? [
+          {
+            label: "Ремонт за рекламу",
+            note: "Чинит и тушит, без покраски",
+            action: async () => {
+              closeMenu();
+              if (!(await playAd("rewarded"))) return;
+              v.state.health = 100;
+              v.state.burning = false;
+              v.state.fire = 0;
+              showBanner("Машина отремонтирована");
+            },
+          },
+        ]
+      : []),
     ...MOD_SHOP.map((m) => ({
       label: m.name,
       note: m.note,
@@ -3278,6 +3410,12 @@ function frame(now: number): void {
     platform().gameplay(playing);
   }
   const raw = (now - last) / 1000;
+  // On "auto", a device that cannot keep up gets the low preset, once.
+  if (playing && save.quality === "auto" && !lowQuality && fpsWatch.frame(raw)) {
+    autoLow = true;
+    applyQuality();
+    showBanner("Графика снижена для плавности");
+  }
   const dt = Math.min(0.1, raw);
   last = now;
   fpsWall += raw;
@@ -3368,6 +3506,8 @@ if (location.search.includes("debug")) {
     hideouts: HIDEOUTS,
     missionThugs,
     exportAt: EXPORT_AT,
+    ads,
+    lowQuality: () => lowQuality,
     startDerby: () => player.vehicle && !runner.active && startMission(derbyMission(layout.n, PLACES.race)),
     startCargo: () => player.boat && !runner.active && startMission(makeBoatRun(rng, CARGO_POINTS, { x: player.x, z: player.z })),
     startMission: (id: string) => {

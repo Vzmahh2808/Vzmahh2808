@@ -175,3 +175,10 @@ body.touch #weapon { left: 132px; top: 88px; bottom: auto; font-size: 12px; }
 body.touch #hint { top: 116px; }
 body.touch #touch .gun { display: none; }
 body.touch #touch.armed .gun { display: block; background: rgba(225,112,85,0.85); border-color: transparent; }
+
+/* "Watch an ad for ..." offer card. */
+#offer { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); z-index: 5; display: none; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; background: rgba(10,12,18,0.88); border: 1px solid #ffd32a; border-radius: 12px; font-size: 15px; white-space: nowrap; }
+#offer.show { display: flex; }
+#offer button { font: inherit; font-weight: 700; padding: 8px 12px; border: none; border-radius: 8px; background: #ffd32a; color: #141826; cursor: pointer; }
+#offer button.secondary { background: rgba(255,255,255,0.12); color: #eef1f6; font-weight: 400; }
+body.touch #offer { bottom: auto; top: 40%; font-size: 13px; }
