@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { Rng } from "./core/rng";
 import { Input } from "./core/input";
-import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildings, roadCoord, surfaceHeight } from "./world/city";
+import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildings, resolveCircleVsPosts, roadCoord, surfaceHeight } from "./world/city";
 import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, PIER_TOP, clampWorld, generateIsland, landAt } from "./world/island";
 import { buildIslandMeshes } from "./world/islandMesh";
 import { buildCityMeshes } from "./world/cityMesh";
@@ -32,7 +32,7 @@ import { Radio } from "./audio/radio";
 import { TouchControls, isTouchDevice } from "./ui/touch";
 import { Rain } from "./fx/rain";
 import { CarAudio } from "./audio/engine";
-import { freshAir, landingDamage, stepVertical, type Air } from "./entities/jumps";
+import { freshAir, landingDamage, resolveCircleVsRamps, stepVertical, type Air } from "./entities/jumps";
 import { ALL_STUNTS_BONUS, RAMPS, STUNT_REWARD, describeJump, finishJump, isCleanLanding, startJump, trackJump, type Jump } from "./game/stunts";
 import { buildRamps } from "./world/rampMesh";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
@@ -104,6 +104,20 @@ const ground = (x: number, z: number) => {
   if (l === "pier") return PIER_TOP;
   return ISLAND_TOP;
 };
+
+/**
+ * What stops someone on foot: buildings and, since a ramp is a solid block to a
+ * walker, the ramps. The player also bumps into lamp posts and trees.
+ */
+function walkBlock(x: number, z: number, r: number, posts = false): { x: number; z: number } | null {
+  let out = resolveCircleVsBuildings(layout, x, z, r);
+  const add = (p: { x: number; z: number } | null) => {
+    if (p) out = out ? { x: out.x + p.x, z: out.z + p.z } : p;
+  };
+  add(resolveCircleVsRamps(RAMPS, x, z, r));
+  if (posts) add(resolveCircleVsPosts(layout, x, z, r));
+  return out;
+}
 
 const smoke = new ParticleSystem(2500, false);
 const fire = new ParticleSystem(2000, true);
@@ -251,11 +265,12 @@ for (const t of spawnTraffic(rng, layout, 45, COLORS)) addVehicle(t.state, t.kin
 
 const POLICE_WHITE = 0xf2f4f7;
 const PATROLS = 3;
-const PURSUERS_BY_STARS = [0, 2, 3, 5, 7, 9];
+const PURSUERS_BY_STARS = [0, 1, 2, 3, 5, 7];
 const wanted = new Wanted();
 const heli = new Helicopter(scene);
 let simTime = 0;
 let policeSpawnTimer = 0;
+let lastWarning = -1e9;
 let roadblockTimer = 8;
 let bustTimer = 0;
 let banner = { text: "", ttl: 0 };
@@ -467,12 +482,16 @@ function policeCanSee(x: number, z: number, range = 65): boolean {
 
 function crime(kind: Crime, x: number, z: number, needsWitness: boolean): void {
   // Minor crimes only count when police see them or a bystander calls it in.
-  if (needsWitness && !policeCanSee(x, z, 80) && !rng.chance(0.4)) return;
+  if (needsWitness && !policeCanSee(x, z, 80) && !rng.chance(0.25)) return;
   if (wanted.add(kind)) {
     audio.alert();
     starsEl.classList.remove("pulse");
     void starsEl.offsetWidth;
     starsEl.classList.add("pulse");
+  } else if (wanted.level === 0 && simTime - lastWarning > 15) {
+    // Below the first star: say so, so the player knows what just happened.
+    lastWarning = simTime;
+    showBanner("Вас заметили. Ещё одно нарушение, и полиция начнёт погоню");
   }
 }
 
@@ -509,7 +528,7 @@ function spawnPursuer(): void {
     const x = roadCoord(layout.n, ix);
     const z = roadCoord(layout.n, iz);
     const d = Math.hypot(x - player.x, z - player.z);
-    if (d < 90 || d > 170) continue;
+    if (d < 120 || d > 190) continue;
     const car = makeCar(x, z, Math.atan2(player.z - z, player.x - x));
     addVehicle(car, "police", POLICE_WHITE, null, makeUnit("pursuit"));
     return;
@@ -572,13 +591,13 @@ function managePolice(dt: number): void {
     policeSpawnTimer -= dt;
     if (pursuers < PURSUERS_BY_STARS[level] && policeSpawnTimer <= 0) {
       spawnPursuer();
-      policeSpawnTimer = 2.5;
+      policeSpawnTimer = 5;
     }
     if (level >= 4 && !heli.active) heli.arrive(player.x, player.z);
     roadblockTimer -= dt;
     if (level >= 3 && player.vehicle && roadblockTimer <= 0) {
       placeRoadblock();
-      roadblockTimer = 22;
+      roadblockTimer = 30;
     }
   } else if (patrols < PATROLS) {
     policeSpawnTimer -= dt;
@@ -607,11 +626,11 @@ function managePolice(dt: number): void {
     }
   }
   bustTimer = grabbing ? bustTimer + dt : Math.max(0, bustTimer - dt * 2);
-  if (bustTimer > 2) arrestPlayer();
+  if (bustTimer > 3.5) arrestPlayer();
 }
 
 function stepCops(dt: number): void {
-  const collide = (x: number, z: number) => resolveCircleVsBuildings(layout, x, z, 0.35);
+  const collide = (x: number, z: number) => walkBlock(x, z, 0.35);
   for (let i = cops.length - 1; i >= 0; i--) {
     const c = cops[i];
     const p = c.ped;
@@ -860,6 +879,8 @@ function setPaused(on: boolean): void {
       `<dt>Машины в гараже</dt><dd>${save.garage.length}</dd>`;
     $("#btn-sound").textContent = audio.muted ? "Включить звук" : "Выключить звук";
     $("#btn-new").textContent = "Новая игра";
+    $("#legend").hidden = true;
+    $("#btn-legend").textContent = "Что означают круги и значки";
     syncAdButton();
     audio.engine(0, 0, false, 1);
     audio.siren(Infinity, 0);
@@ -870,6 +891,11 @@ function setPaused(on: boolean): void {
   }
 }
 $("#btn-resume").addEventListener("click", () => setPaused(false));
+$("#btn-legend").addEventListener("click", () => {
+  const box = $("#legend");
+  box.hidden = !box.hidden;
+  $("#btn-legend").textContent = box.hidden ? "Что означают круги и значки" : "Скрыть пояснения";
+});
 $("#btn-quality").addEventListener("click", () => {
   save.quality = save.quality === "auto" ? (lowQuality ? "high" : "low") : save.quality === "low" ? "high" : "low";
   persist();
@@ -1568,7 +1594,7 @@ function removeThug(i: number): void {
 }
 
 function stepThugs(dt: number): void {
-  const collide = (x: number, z: number) => resolveCircleVsBuildings(layout, x, z, 0.35);
+  const collide = (x: number, z: number) => walkBlock(x, z, 0.35);
   const heard = simTime - lastShot < 0.25;
   const target = player.dead > 0 || player.boat ? null : player;
   for (let i = thugs.length - 1; i >= 0; i--) {
@@ -1648,7 +1674,7 @@ function hunterGuns(v: Vehicle, dt: number): void {
 
 // ---------------------------------------------------------------- gun shop
 
-const gunShopMarker = new ZoneMarker(scene, 0xe17055, "О", 4);
+const gunShopMarker = new ZoneMarker(scene, 0xe17055, "О", 4, "Оружейная");
 gunShopMarker.show(PLACES.gunShop.x, PLACES.gunShop.z);
 
 function openGunShop(): void {
@@ -1702,21 +1728,21 @@ const REGATTA_M = regattaMission();
 const runner = new MissionRunner();
 const missionCars = new Map<string, Vehicle>();
 const missionBoats = new Map<string, Boat>();
-const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4);
-const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5);
-const regattaMarker = new ZoneMarker(scene, 0x00d2d3, "Л", 7);
-const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5);
-const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5);
-const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4);
-const depotMarker = new ZoneMarker(scene, 0xe1b12c, "Д", 5);
-const exportMarker = new ZoneMarker(scene, 0x00b894, "Э", 6);
+const contactMarker = new ZoneMarker(scene, 0xffd32a, "!", 4, "Задание");
+const raceMarker = new ZoneMarker(scene, 0xff9f43, "З", 5, "Гонки");
+const regattaMarker = new ZoneMarker(scene, 0x00d2d3, "Л", 7, "Пристань");
+const garageMarker = new ZoneMarker(scene, 0x7bed9f, "Г", 5, "Гараж");
+const paintMarker = new ZoneMarker(scene, 0x48dbfb, "П", 5, "Мастерская");
+const shopMarker = new ZoneMarker(scene, 0xc56cf0, "А", 4, "Автосалон");
+const depotMarker = new ZoneMarker(scene, 0xe1b12c, "Д", 5, "Склад: курьер");
+const exportMarker = new ZoneMarker(scene, 0x00b894, "Э", 6, "Экспорт машин");
 const EXPORT_AT = exportDock(layout.n);
 exportMarker.show(EXPORT_AT.x, EXPORT_AT.z);
 if (save.export.wanted.length === 0) save.export.wanted = exportList(rng);
-const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6);
-const holdMarker = new ZoneMarker(scene, 0xff6b81, "⚑", 16);
+const goalMarker = new ZoneMarker(scene, 0xffd32a, "★", 6, "Цель");
+const holdMarker = new ZoneMarker(scene, 0xff6b81, "⚑", 16, "Держитесь здесь");
 /** One marker per cache in a collect step. */
-const cacheMarkers = Array.from({ length: 6 }, () => new ZoneMarker(scene, 0x55efc4, "◆", 4));
+const cacheMarkers = Array.from({ length: 6 }, () => new ZoneMarker(scene, 0x55efc4, "◆", 4, "Заберите"));
 const beam = new BeamMarker(scene, 0xff9f43, 9);
 const beamNext = new BeamMarker(scene, 0xff9f43, 9);
 const targetArrow = new TargetArrow(scene);
@@ -2286,9 +2312,9 @@ function syncMissionVisuals(dt: number): void {
 const BUSINESSES = businesses(layout.n);
 const bizMarkers = BUSINESSES.map((b) => ({
   b,
-  sale: new ZoneMarker(scene, 0xa29bfe, "$", 5),
-  owned: new ZoneMarker(scene, 0x2ecc71, "$", 5),
-  raid: new ZoneMarker(scene, 0xff4757, "!", 5),
+  sale: new ZoneMarker(scene, 0xa29bfe, "$", 5, "Бизнес на продажу"),
+  owned: new ZoneMarker(scene, 0x2ecc71, "$", 5, "Ваш бизнес: касса"),
+  raid: new ZoneMarker(scene, 0xff4757, "!", 5, "Наезд на бизнес!"),
 }));
 const insideBiz: Record<string, boolean> = {};
 
@@ -2362,7 +2388,7 @@ function syncBusinessMarkers(dt: number): void {
 // ---------------------------------------------------------------- gang hideouts
 
 const HIDEOUTS = hideouts(layout.n);
-const hideoutMarkers = HIDEOUTS.map((h) => ({ h, marker: new ZoneMarker(scene, 0xd63031, "Б", 5) }));
+const hideoutMarkers = HIDEOUTS.map((h) => ({ h, marker: new ZoneMarker(scene, 0xd63031, "Б", 5, "Притон банды") }));
 const insideHideout: Record<string, boolean> = {};
 
 /** Hideouts show up once the player owns a gun. */
@@ -2848,7 +2874,7 @@ function update(dt: number, now: number): void {
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 10);
     player.x += mx * player.speed * dt;
     player.z += mz * player.speed * dt;
-    const push = resolveCircleVsBuildings(layout, player.x, player.z, 0.4);
+    const push = walkBlock(player.x, player.z, 0.4, true);
     if (push) {
       player.x += push.x;
       player.z += push.z;
@@ -2939,7 +2965,11 @@ function update(dt: number, now: number): void {
       s.vz = 0;
     }
     // High in the air a car clears the bridge rails.
-    const push = resolveCircleVsBuildings(v.air.airborne && v.air.y > 1.2 ? airLayout() : layout, s.x, s.z, v.radius * 0.85);
+    const high = v.air.airborne && v.air.y > 1.2;
+    const wallPush = resolveCircleVsBuildings(high ? airLayout() : layout, s.x, s.z, v.radius * 0.85);
+    // Lamp posts and tree trunks are solid too, unless the car is flying over them.
+    const postPush = high ? null : resolveCircleVsPosts(layout, s.x, s.z, v.radius * 0.7);
+    const push = wallPush && postPush ? { x: wallPush.x + postPush.x, z: wallPush.z + postPush.z } : wallPush ?? postPush;
     if (push) {
       const hpBefore = s.health;
       const dmg = collideCar(s, push.x, push.z);
@@ -3018,7 +3048,7 @@ function update(dt: number, now: number): void {
   }
 
   // Pedestrians.
-  const collidePed = (x: number, z: number) => resolveCircleVsBuildings(layout, x, z, 0.35);
+  const collidePed = (x: number, z: number) => walkBlock(x, z, 0.35);
   for (const p of peds) {
     if (p.state === "gone") continue;
     if (Math.abs(p.x - player.x) > 200 || Math.abs(p.z - player.z) > 200) continue;
@@ -3273,6 +3303,40 @@ function syncVisuals(dt: number): void {
   flash.intensity *= Math.exp(-dt * 7);
 }
 
+/** One line about the ring the player is standing near: what it is and what to do. */
+function nearbyPlaceHint(): string | null {
+  const spots: Array<{ x: number; z: number; text: string }> = [
+    { ...PLACES.garage, text: "«Гараж»: заедьте на своей машине, чтобы сохранить её" },
+    { ...PLACES.paint, text: "«Мастерская»: заедьте на машине — ремонт, покраска и тюнинг" },
+    { ...PLACES.shop, text: "«Автосалон»: подойдите или подъедьте, чтобы купить машину" },
+    { ...PLACES.gunShop, text: "«Оружейная»: подойдите пешком, чтобы купить оружие и патроны" },
+    { ...EXPORT_AT, text: `«Экспорт машин»: заедьте на угнанной машине из списка, вам заплатят. Ищут: ${exportWanted()}` },
+  ];
+  if (!runner.active) {
+    const next = nextStory();
+    if (next) spots.push({ ...(next.contact ?? PLACES.contact), text: "«Задание»: подойдите, чтобы начать следующее сюжетное задание" });
+    spots.push({ ...PLACES.race, text: "«Гонки»: заедьте на машине — заезд на время, уличные гонки, дерби" });
+    spots.push({ ...PLACES.depot, text: "«Склад»: заедьте на машине — курьерские рейсы за деньги" });
+    spots.push({ ...MARINA, text: "«Пристань»: подплывите на катере — регата и грузы по воде" });
+    for (const h of HIDEOUTS) if (hideoutOpen(h.id)) spots.push({ ...h.at, text: "«Притон банды»: подойдите с оружием, уберите всех бандитов за награду" });
+    for (const b of BUSINESSES) {
+      const st = stateOf(save.business, b.id);
+      const text = !st.owned ? `«${b.name}»: можно купить, приносит деньги каждый час` : st.raid > 0 ? `«${b.name}»: на бизнес напала банда, разберитесь` : `«${b.name}»: ваш бизнес, здесь забирают выручку`;
+      spots.push({ ...b.at, text });
+    }
+  }
+  let best: string | null = null;
+  let bestD = 16;
+  for (const sp of spots) {
+    const d = Math.hypot(sp.x - player.x, sp.z - player.z);
+    if (d < bestD) {
+      bestD = d;
+      best = sp.text;
+    }
+  }
+  return best;
+}
+
 function updateHud(): void {
   const v = player.vehicle;
   const boat = player.boat;
@@ -3301,6 +3365,13 @@ function updateHud(): void {
     const txt = `${gun.spec.name} · ${gun.reloading > 0 ? "перезарядка" : gun.mag} / ${gun.reserve}`;
     if (weaponEl.textContent !== txt) weaponEl.textContent = txt;
     weaponEl.classList.toggle("empty", gun.total === 0);
+  }
+  // A ring nearby explains itself, unless something urgent is on screen. Before the first
+  // mission is done, point at where to start.
+  if (player.dead <= 0 && !(v && v.state.burning) && bustTimer <= 0.2) {
+    const info = nearbyPlaceHint();
+    if (info) hintEl.textContent = info;
+    else if (!runner.active && save.missionsDone.length === 0 && !v && !boat && (!hintEl.textContent || hintEl.textContent.startsWith("WASD"))) hintEl.textContent = "Ищите жёлтый круг «Задание»: там начинается первое задание. Он отмечен на мини-карте знаком «!»";
   }
   hintEl.classList.toggle("alert", (!!v && v.state.burning) || bustTimer > 0.2);
   const stars = starsEl.children;
@@ -3508,6 +3579,7 @@ if (location.search.includes("debug")) {
     hideouts: HIDEOUTS,
     missionThugs,
     exportAt: EXPORT_AT,
+    lamps: layout.lamps,
     ads,
     lowQuality: () => lowQuality,
     startDerby: () => player.vehicle && !runner.active && startMission(derbyMission(layout.n, PLACES.race)),

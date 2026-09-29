@@ -8,13 +8,34 @@ import { lineOfSight, makeUnit, nearestIntersection, policeDrive, stepToward } f
 describe("wanted level", () => {
   it("maps heat to stars", () => {
     expect(starsFor(0)).toBe(0);
-    expect(starsFor(1)).toBe(1);
-    expect(starsFor(9.9)).toBe(2);
+    expect(starsFor(1.9)).toBe(0);
+    expect(starsFor(2)).toBe(1);
+    expect(starsFor(10.9)).toBe(2);
     expect(starsFor(100)).toBe(5);
+  });
+
+  it("gives a lone minor offence no stars, forgets it, and stars on the second", () => {
+    const w = new Wanted();
+    expect(w.add("carjack")).toBe(false);
+    expect(w.level).toBe(0);
+    // Left alone, the heat fades away.
+    w.update(10, false);
+    expect(w.heat).toBe(0);
+    // Two in a row bring the chase.
+    w.add("hitPed");
+    expect(w.add("hitPed")).toBe(true);
+    expect(w.level).toBe(1);
+    expect(w.add("carjack")).toBe(false);
+  });
+
+  it("makes escaping quicker than before", () => {
+    expect(evadeTime(1)).toBeLessThanOrEqual(10);
+    expect(evadeTime(5)).toBeLessThanOrEqual(26);
   });
 
   it("only rises from crimes and clears after staying unseen", () => {
     const w = new Wanted();
+    w.add("hitPed");
     expect(w.add("hitPed")).toBe(true);
     expect(w.level).toBe(1);
     w.add("ramCop");

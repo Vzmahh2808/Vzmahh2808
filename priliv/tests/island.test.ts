@@ -28,7 +28,7 @@ describe("island geography", () => {
 
   it("keeps island roads clear of containers, warehouses and cranes", () => {
     const island = generateIsland(new Rng(7));
-    const fake = { n: 8, half: 240, buildings: island.colliders, trees: [], lamps: [], intersections: [], parking: [] };
+    const fake = { n: 8, half: 240, buildings: island.colliders, trees: [], lamps: [], posts: [], intersections: [], parking: [] };
     for (let x = 406; x <= 634; x += 3) {
       for (const z of [-108, 0, 108]) expect(resolveCircleVsBuildings(fake, x, z, 1.5)).toBeNull();
     }
@@ -54,7 +54,7 @@ describe("chapter two", () => {
     expect(all.length).toBeGreaterThanOrEqual(10);
     expect(all[5].id).toBe("ch2-bridge");
     const island = generateIsland(new Rng(20260924));
-    const fake = { n: 8, half: 240, buildings: island.colliders, trees: [], lamps: [], intersections: [], parking: [] };
+    const fake = { n: 8, half: 240, buildings: island.colliders, trees: [], lamps: [], posts: [], intersections: [], parking: [] };
     const pts: Array<{ x: number; z: number }> = [...Object.values(ISLAND_SPOTS)];
     for (const m of chapterTwo(8)) {
       if (m.contact) pts.push(m.contact);

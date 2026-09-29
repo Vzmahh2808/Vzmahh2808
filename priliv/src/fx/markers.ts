@@ -21,6 +21,29 @@ function labelTexture(text: string, color: string): THREE.CanvasTexture {
   return t;
 }
 
+/** A name plate: a rounded dark strip with the place's name in the marker's colour. */
+function nameTexture(text: string, color: string): THREE.CanvasTexture {
+  const c = document.createElement("canvas");
+  c.width = 320;
+  c.height = 72;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "rgba(10,12,18,0.82)";
+  g.beginPath();
+  g.roundRect(4, 8, 312, 56, 18);
+  g.fill();
+  g.lineWidth = 3;
+  g.strokeStyle = color;
+  g.stroke();
+  g.fillStyle = "#eef1f6";
+  g.font = "600 30px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(text, 160, 38, 296);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 /** Glowing ground ring with a floating badge, used for places and mission goals. */
 export class ZoneMarker {
   readonly group = new THREE.Group();
@@ -28,7 +51,9 @@ export class ZoneMarker {
   private badge: THREE.Sprite;
   private t = Math.random() * 10;
 
-  constructor(scene: THREE.Scene, color: number, label: string, radius = 4) {
+  private plate: THREE.Sprite | null = null;
+
+  constructor(scene: THREE.Scene, color: number, label: string, radius = 4, name = "") {
     const css = "#" + color.toString(16).padStart(6, "0");
     const wallGeo = new THREE.CylinderGeometry(radius, radius, 2.2, 40, 1, true);
     wallGeo.translate(0, 1.1, 0);
@@ -46,6 +71,13 @@ export class ZoneMarker {
     this.badge.scale.set(2.2, 2.2, 1);
     this.badge.position.y = 4;
     this.group.add(this.wall, ring, this.badge);
+    if (name) {
+      // The name sits above the badge so a glance says what the ring is for.
+      this.plate = new THREE.Sprite(new THREE.SpriteMaterial({ map: nameTexture(name, css), depthWrite: false }));
+      this.plate.scale.set(6.4, 1.44, 1);
+      this.plate.position.y = 6.2;
+      this.group.add(this.plate);
+    }
     this.group.renderOrder = 4;
     this.group.visible = false;
     scene.add(this.group);
@@ -65,6 +97,7 @@ export class ZoneMarker {
     if (!this.group.visible) return;
     this.t += dt;
     this.badge.position.y = 4 + Math.sin(this.t * 2.2) * 0.35;
+    if (this.plate) this.plate.position.y = 6.2 + Math.sin(this.t * 2.2) * 0.2;
     (this.wall.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.sin(this.t * 3) * 0.08;
   }
 }

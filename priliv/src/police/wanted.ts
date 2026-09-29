@@ -12,8 +12,15 @@ export const CRIME_HEAT: Record<Crime, number> = {
   shootPed: 3,
 };
 
-/** Heat needed for 1..5 stars. */
-export const STAR_HEAT = [1, 4, 10, 20, 35];
+/**
+ * Heat needed for 1..5 stars. One minor offence (a knocked pedestrian, a
+ * carjacking, a shot) stays below the first star: the police take note, and
+ * only a second one within a few seconds brings the chase.
+ */
+export const STAR_HEAT = [2, 5, 11, 21, 36];
+
+/** Heat lost per second while nobody is after the player. */
+export const HEAT_DECAY = 0.25;
 export const MAX_STARS = 5;
 
 export function starsFor(heat: number): number {
@@ -24,7 +31,7 @@ export function starsFor(heat: number): number {
 
 /** Seconds out of police sight needed to shake off `level` stars. */
 export function evadeTime(level: number): number {
-  return 10 + level * 5;
+  return 6 + level * 4;
 }
 
 /**
@@ -61,7 +68,11 @@ export class Wanted {
 
   /** Advance the escape timer. Returns true on the frame the player escapes. */
   update(dt: number, seen: boolean): boolean {
-    if (this.level === 0) return false;
+    if (this.level === 0) {
+      // A lone offence is forgotten quickly.
+      this.heat = Math.max(0, this.heat - dt * HEAT_DECAY);
+      return false;
+    }
     if (seen) {
       this.unseen = 0;
       return false;
