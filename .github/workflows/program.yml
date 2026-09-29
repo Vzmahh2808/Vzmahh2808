@@ -1,0 +1,94 @@
+name: program
+
+on:
+  push:
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
+  pull_request:
+    paths: ["roguelike/program/**", "roguelike/tests/fixtures/**", ".github/workflows/program.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: program-${{ github.ref }}
+  # Pushes queue instead of cancelling, so a devnet deploy is never cut off halfway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: roguelike/program
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/solana
+            roguelike/program/target
+          key: program-${{ runner.os }}-${{ hashFiles('roguelike/program/Cargo.lock') }}
+          restore-keys: program-${{ runner.os }}-
+      - name: Install the Solana toolchain (Agave)
+        working-directory: .
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - run: solana --version && cargo build-sbf --version
+      - name: Unit tests
+        run: cargo test -p dungeon-arena
+      - name: Build the program
+        run: cargo build-sbf --manifest-path programs/dungeon-arena/Cargo.toml
+      - name: Integration tests in LiteSVM
+        run: cargo test -p dungeon-arena-integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dungeon-arena-program
+          path: roguelike/program/target/deploy/dungeon_arena.so
+
+  # Deploys the tested build to devnet on pushes, or upgrades it when the build changed. Skipped
+  # until the SOLANA_DEVNET_DEPLOYER secret is set; see roguelike/program/README.md.
+  deploy-devnet:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: program-devnet
+      cancel-in-progress: false
+    steps:
+      - name: Check for the deploy keys
+        id: keys
+        env:
+          DEPLOYER_KEYPAIR: ${{ secrets.SOLANA_DEVNET_DEPLOYER }}
+        run: |
+          if [ -n "$DEPLOYER_KEYPAIR" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::SOLANA_DEVNET_DEPLOYER is not set, so the program is not deployed to devnet"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.keys.outputs.ready
+      - uses: actions/download-artifact@v4
+        if: steps.keys.outputs.ready
+        with:
+          name: dungeon-arena-program
+          path: build
+      - name: Install the Solana CLI (Agave)
+        if: steps.keys.outputs.ready
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Deploy to devnet
+        if: steps.keys.outputs.ready
+        env:
+          DEPLOYER_KEYPAIR: ${{ secrets.SOLANA_DEVNET_DEPLOYER }}
+          PROGRAM_KEYPAIR: ${{ secrets.ARENA_PROGRAM_KEYPAIR }}
+        run: |
+          umask 077
+          printf '%s' "$DEPLOYER_KEYPAIR" > "$RUNNER_TEMP/deployer.json"
+          program_keypair=
+          if [ -n "$PROGRAM_KEYPAIR" ]; then
+            printf '%s' "$PROGRAM_KEYPAIR" > "$RUNNER_TEMP/program.json"
+            program_keypair="$RUNNER_TEMP/program.json"
+          fi
+          roguelike/program/scripts/deploy-devnet.sh build/dungeon_arena.so "$RUNNER_TEMP/deployer.json" ${program_keypair:+"$program_keypair"}

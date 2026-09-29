@@ -1,7 +1,9 @@
+import type { ResolvedChallenge } from "../chain/challenge";
 import { SAVE_VERSION, type GameState } from "./types";
 
 const SAVE_KEY = "dungeon-delver.save";
 const SCORES_KEY = "dungeon-delver.scores";
+const CHALLENGE_KEY = "dungeon-delver.challenge";
 const SCORE_LIMIT = 10;
 
 export interface ScoreEntry {
@@ -56,6 +58,26 @@ export function clearSave(store: Storage | null = storage()): void {
     store?.removeItem(SAVE_KEY);
   } catch {
     /* ignore */
+  }
+}
+
+/** Remembers which daily challenge the saved run belongs to; null marks a free run. */
+export function saveChallenge(challenge: ResolvedChallenge | null, store: Storage | null = storage()): void {
+  try {
+    if (challenge) store?.setItem(CHALLENGE_KEY, JSON.stringify(challenge));
+    else store?.removeItem(CHALLENGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadChallenge(store: Storage | null = storage()): ResolvedChallenge | null {
+  if (!store) return null;
+  try {
+    const raw = store.getItem(CHALLENGE_KEY);
+    return raw ? (JSON.parse(raw) as ResolvedChallenge) : null;
+  } catch {
+    return null;
   }
 }
 

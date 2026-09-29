@@ -1,12 +1,24 @@
+import { SLOT_MS, dayId, parseChallenges, resolveChallenge, type Challenge, type ResolvedChallenge } from "./chain/challenge";
+import { MAINNET_RPC, SolanaRpc } from "./chain/rpc";
 import { Game, itemDescription, itemName, scoreOf, xpToNext } from "./game/game";
 import { itemDef, monsterDef } from "./game/data";
+import { replayOf } from "./game/replay";
 import { randomSeed } from "./game/rng";
-import { clearSave, loadGame, loadScores, recordScore, saveGame, type ScoreEntry } from "./game/save";
+import {
+  clearSave,
+  loadChallenge,
+  loadGame,
+  loadScores,
+  recordScore,
+  saveChallenge,
+  saveGame,
+  type ScoreEntry,
+} from "./game/save";
 import { INVENTORY_LIMIT, PLAYER_ID, type Point } from "./game/types";
 import { Renderer } from "./ui/renderer";
 import { Sound } from "./ui/sound";
 
-type Mode = "title" | "play" | "inventory" | "help" | "scores" | "over";
+type Mode = "title" | "play" | "inventory" | "help" | "scores" | "over" | "daily";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -29,6 +41,12 @@ let travelTimer = 0;
 let exploring = false;
 let scoreRecorded = false;
 let inventorySel = 0;
+/** Daily challenge of the current run; null for a free run. */
+let challenge: ResolvedChallenge | null = null;
+/** Challenge resolved and shown on the intro screen, waiting for "Начать". */
+let pendingChallenge: ResolvedChallenge | null = null;
+/** Bumped on every daily-challenge request so a slow answer cannot overwrite a newer screen. */
+let dailyRequest = 0;
 
 // ---------------------------------------------------------------- rendering loop
 
@@ -164,8 +182,11 @@ function finishGame(): void {
   setTimeout(() => showGameOver(entry, rank), 1300);
 }
 
-function startNewGame(): void {
-  game = Game.newGame(randomSeed());
+function startNewGame(daily: ResolvedChallenge | null = null): void {
+  game = Game.newGame(daily ? daily.seed : randomSeed());
+  challenge = daily;
+  saveChallenge(daily);
+  if (daily) game.log(`Испытание ${daily.id}: подземелье построено из блока Solana №${daily.blockSlot}.`, "system");
   scoreRecorded = false;
   renderer.reset();
   renderer.clearFade();
@@ -182,6 +203,8 @@ function continueGame(): boolean {
     clearSave();
     return false;
   }
+  const saved = loadChallenge();
+  challenge = saved && saved.seed === state.seed ? saved : null;
   scoreRecorded = false;
   renderer.reset();
   renderer.clearFade();
@@ -279,6 +302,7 @@ function showTitle(): void {
     <div class="menu">
       <button data-go="continue" ${hasSave ? "" : "disabled"}>Продолжить <span class="hint">C</span></button>
       <button data-go="new">Новая игра <span class="hint">N</span></button>
+      <button data-go="daily">Испытание дня <span class="hint">D</span></button>
       <button data-go="scores">Рекорды <span class="hint">R</span></button>
       <button data-go="help">Как играть <span class="hint">?</span></button>
     </div>
@@ -354,11 +378,121 @@ function showGameOver(entry: ScoreEntry, rank: number): void {
     }</p>
     <div class="big">${entry.score} очков</div>
     <p>${rank >= 0 ? `Место в таблице рекордов: <b>${rank + 1}</b>.` : "В десятку лучших не попало."}</p>
+    ${replayBlock()}
     <div class="menu">
+      ${challenge ? `<button data-go="copy-replay">Скопировать запись партии</button>` : ""}
       <button data-go="new">Новая игра <span class="hint">N</span></button>
       <button data-go="scores">Рекорды <span class="hint">R</span></button>
     </div>
   `);
+}
+
+/** For a challenge run: the replay anyone can re-play to check the score. */
+function replayBlock(): string {
+  const replay = game ? replayOf(game) : null;
+  if (!challenge || !replay) return "";
+  return `
+    <h2 style="margin-top:16px">Запись партии</h2>
+    <p class="sub">По записи любой может заново сыграть партию и проверить счёт: <code>npm run challenge -- check запись.json</code>.</p>
+    <textarea id="replay-out" readonly rows="4" aria-label="Запись партии">${escapeHtml(JSON.stringify({ ...replay, challenge }))}</textarea>`;
+}
+
+function copyReplay(): void {
+  const area = card.querySelector<HTMLTextAreaElement>("#replay-out");
+  const btn = card.querySelector<HTMLButtonElement>('[data-go="copy-replay"]');
+  if (!area || !btn) return;
+  const selectInstead = () => {
+    area.focus();
+    area.select();
+    btn.textContent = "Запись выделена, скопируйте её вручную";
+  };
+  if (!navigator.clipboard) return selectInstead();
+  navigator.clipboard.writeText(area.value).then(() => {
+    btn.textContent = "Запись скопирована";
+  }, selectInstead);
+}
+
+// ---------------------------------------------------------------- daily challenge
+
+const dailyBack = `<div class="menu"><button data-go="back">Назад <span class="hint">Esc</span></button></div>`;
+
+function formatWait(ms: number): string {
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes <= 1) return "минуту";
+  if (minutes < 60) return `${minutes} мин`;
+  return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`;
+}
+
+function explorerLink(slot: number, rpcUrl: string): string {
+  const cluster = rpcUrl.includes("devnet") ? "?cluster=devnet" : rpcUrl.includes("testnet") ? "?cluster=testnet" : "";
+  return `<a href="https://explorer.solana.com/block/${slot}${cluster}" target="_blank" rel="noopener">№${slot}</a>`;
+}
+
+/**
+ * Finds today's announced challenge (or the one given as ?challenge=id@slot), resolves its
+ * Solana block and shows the intro. ?rpc=URL switches the RPC endpoint.
+ */
+async function showDaily(): Promise<void> {
+  mode = "daily";
+  stopTravel();
+  pendingChallenge = null;
+  const request = ++dailyRequest;
+  const stale = () => request !== dailyRequest || mode !== "daily";
+  showOverlay(`<h2>Испытание дня</h2><p class="sub">Загружаем объявление и блок Solana…</p>${dailyBack}`);
+
+  const params = new URLSearchParams(location.search);
+  const rpcUrl = params.get("rpc") || MAINNET_RPC;
+  try {
+    let target: Challenge | undefined;
+    const override = params.get("challenge");
+    if (override) {
+      const [id, slot] = override.split("@");
+      target = parseChallenges([{ id, slot: Number(slot) }])[0];
+    } else {
+      const res = await fetch("./challenges.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(`список испытаний недоступен (HTTP ${res.status})`);
+      const today = dayId(new Date());
+      target = parseChallenges(await res.json()).find((c) => c.id === today);
+    }
+    if (stale()) return;
+    if (!target) {
+      showOverlay(`<h2>Испытание дня</h2><p>На сегодня испытание не объявлено.</p>${dailyBack}`);
+      return;
+    }
+
+    const r = await resolveChallenge(new SolanaRpc(rpcUrl), target);
+    if (stale()) return;
+    if (r.state === "pending") {
+      showOverlay(`
+        <h2>Испытание ${escapeHtml(target.id)}</h2>
+        <p>Подземелье появится после блока Solana №${target.slot}, примерно через ${formatWait(r.slotsLeft * SLOT_MS)}.</p>
+        <div class="menu"><button data-go="daily">Проверить снова</button><button data-go="back">Назад <span class="hint">Esc</span></button></div>`);
+      return;
+    }
+
+    const c = r.challenge;
+    pendingChallenge = c;
+    showOverlay(`
+      <h2>Испытание ${escapeHtml(c.id)}</h2>
+      <p class="sub">Подземелье построено из хеша блока Solana, которого ещё не существовало, когда испытание объявили. Заранее его не знал никто, даже мы. Все игроки сегодня получают одно и то же подземелье.</p>
+      <dl class="facts">
+        <dt>Блок</dt><dd>${explorerLink(c.blockSlot, rpcUrl)}</dd>
+        <dt>Хеш</dt><dd>${escapeHtml(c.blockhash)}</dd>
+        <dt>Seed</dt><dd>${c.seed}</dd>
+      </dl>
+      <div class="menu">
+        <button data-go="daily-start">Начать <span class="hint">Enter</span></button>
+        <button data-go="back">Назад <span class="hint">Esc</span></button>
+      </div>`);
+  } catch (e) {
+    if (stale()) return;
+    const message = e instanceof Error ? e.message : String(e);
+    showOverlay(`
+      <h2>Испытание дня</h2>
+      <p>Не удалось получить испытание: ${escapeHtml(message)}</p>
+      <p class="sub">Другой RPC можно указать в адресе страницы: <code>?rpc=https://…</code></p>
+      <div class="menu"><button data-go="daily">Попробовать снова</button><button data-go="back">Назад <span class="hint">Esc</span></button></div>`);
+  }
 }
 
 function showInventory(): void {
@@ -408,6 +542,15 @@ function handleMenu(go: string): void {
   switch (go) {
     case "new":
       startNewGame();
+      break;
+    case "daily":
+      void showDaily();
+      break;
+    case "daily-start":
+      if (pendingChallenge) startNewGame(pendingChallenge);
+      break;
+    case "copy-replay":
+      copyReplay();
       break;
     case "continue":
       if (!continueGame()) showTitle();
@@ -470,7 +613,13 @@ window.addEventListener("keydown", (ev) => {
     if (key === "n" || key === "N" || key === "т") startNewGame();
     else if (key === "c" || key === "C" || key === "с") handleMenu("continue");
     else if (key === "r" || key === "R" || key === "к") showScores();
+    else if (key === "d" || key === "D" || key === "в") void showDaily();
     else if (key === "?" || key === "F1") showHelp();
+    return;
+  }
+  if (mode === "daily") {
+    if (key === "Escape") handleMenu("back");
+    else if (key === "Enter" && pendingChallenge) handleMenu("daily-start");
     return;
   }
   if (mode === "help" || mode === "scores") {

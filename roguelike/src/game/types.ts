@@ -142,6 +142,11 @@ export interface GameState {
   status: GameStatus;
   nextMonsterId: number;
   deathCause: string;
+  /**
+   * Every accepted player action since the start of the run, encoded by `encodeAction`.
+   * Missing in saves made before recording existed; such runs cannot be replayed.
+   */
+  actions?: string;
 }
 
 /** Entity id used for the player in movement/attack events. */

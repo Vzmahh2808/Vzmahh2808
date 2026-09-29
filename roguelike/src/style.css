@@ -159,6 +159,23 @@ dl.grid dd { margin: 0; text-align: right; }
 .card .keys kbd { font-family: var(--font-mono); background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
 .card .glyphs { font-family: var(--font-mono); columns: 2; font-size: 13px; }
 .card .glyphs div { margin: 2px 0; }
+.card code { font-family: var(--font-mono); font-size: 12.5px; background: var(--panel-2); border-radius: 4px; padding: 1px 5px; }
+.card .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 8px; font-size: 13.5px; }
+.card .facts dt { color: var(--muted); }
+.card .facts dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.card .facts a { color: var(--accent); }
+.card textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: inherit;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
 .big { font-size: 34px; font-family: var(--font-mono); color: var(--accent); margin: 8px 0; }
 .inv-modal li { display: flex; gap: 10px; align-items: baseline; padding: 8px 8px; border-radius: 6px; cursor: pointer; }
 .inv-modal li:hover, .inv-modal li.sel { background: var(--panel-2); outline: 1px solid var(--accent); }
