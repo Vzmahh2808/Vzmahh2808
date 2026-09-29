@@ -1655,6 +1655,8 @@ function openGunShop(): void {
   const items: MenuItem[] = [];
   for (const id of WEAPON_ORDER) {
     const w = WEAPONS[id];
+    // Some guns come on sale only after a story mission.
+    if (w.unlock && !save.missionsDone.includes(w.unlock)) continue;
     const g = guns[id];
     if (!g) {
       items.push({

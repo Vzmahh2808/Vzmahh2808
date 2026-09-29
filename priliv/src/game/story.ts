@@ -92,7 +92,7 @@ export function raceMission(n: number): Mission {
 
 /** All chapters in play order. */
 export function storyMissions(n: number): Mission[] {
-  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour(), ...chapterFive(n), ...chapterSix(n)];
+  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour(), ...chapterFive(n), ...chapterSix(n), ...chapterSeven(n)];
 }
 
 /** Gosha's bar «Якорь», where chapter five is handed out. */
@@ -306,6 +306,119 @@ export function chapterSix(n: number): Mission[] {
       heatAfter: { 0: 3 },
       steps: [
         { kind: "clear", targets: Object.keys(last), text: "Уберите Бойко и его людей" },
+        { kind: "evade", text: "Оторвитесь от полиции" },
+      ],
+    },
+  ];
+}
+
+/** The town hall square, where the mayor's people hold out. */
+export function hallOf(n: number): Point {
+  return road(n, 4, 2, 0, PITCH / 2);
+}
+
+export function chapterSeven(n: number): Mission[] {
+  const office = places(n).office;
+  const hall = hallOf(n);
+  const V = Math.PI / 2;
+  const scene = (list: ThugSpec[]) => keyed("t", list);
+  // Three documents lie around the hall; a few armed men watch them.
+  const papers = [road(n, 4, 2, 0, 22), road(n, 4, 3, 0, -22), road(n, 5, 2, -22, 0)];
+  const watchers = scene([
+    { ...road(n, 4, 2, 5, 6), heading: 0 },
+    { ...road(n, 4, 3, -5, -6), heading: V },
+    { ...road(n, 5, 2, -6, 5), heading: Math.PI },
+  ]);
+  const siege = scene([
+    { ...road(n, 1, 1, 0, 24), heading: -V, alerted: true },
+    { ...road(n, 1, 1, 0, 36), heading: -V, alerted: true },
+    { ...road(n, 2, 2, -24, 0), heading: 0, alerted: true },
+    { ...road(n, 2, 2, -34, 0), heading: 0, alerted: true },
+    { ...road(n, 0, 2, 22, 5), heading: Math.PI, alerted: true },
+    { ...road(n, 0, 2, 32, -5), heading: Math.PI, alerted: true },
+    { ...road(n, 1, 3, 5, -22), heading: V, alerted: true },
+    { ...road(n, 1, 3, -5, -32), heading: V, alerted: true },
+  ]);
+  const guards = scene([
+    ...crew(hall.x - 9, hall.z - 14, "x", 4, 6, 0),
+    ...crew(hall.x - 9, hall.z + 14, "x", 3, 6, 0),
+    { ...road(n, 5, 2, 8, 12), heading: Math.PI },
+    { ...road(n, 3, 2, -8, 12), heading: 0 },
+    { x: hall.x, z: hall.z, heading: V, hp: 320 },
+  ]);
+  return [
+    {
+      id: "ch7-leak",
+      chapter: 7,
+      chapterTitle: "Глава 7: Мэрия",
+      contact: office,
+      title: "Утечка",
+      brief: "Глава 7. За Северными стоял сам мэр. Помощник мэра едет на встречу: проследите за ним, не приближаясь. Потом заберите три папки с документами на площади у мэрии. Их стережёт охрана.",
+      reward: 5000,
+      time: 420,
+      spawns: { aide: { kind: "sedan", color: 0x8395a7, ...road(n, 2, 2, 0, 20), heading: V, drives: true } },
+      thugs: watchers,
+      steps: [
+        { kind: "tail", target: "aide", near: 16, far: 75, seconds: 40, text: "Следуйте за помощником мэра" },
+        { kind: "collect", points: papers, radius: 5, text: "Заберите папки у мэрии" },
+        { kind: "goto", at: office, radius: 8, vehicle: "any", text: "Отвезите документы Нике" },
+      ],
+    },
+    {
+      id: "ch7-cash",
+      chapter: 7,
+      contact: office,
+      title: "Инкассатор",
+      brief: "Деньги мэра возят в зелёном фургоне. Угоните его, привезите во двор Севы и оторвитесь от полиции: на угон инкассатора выйдет весь город.",
+      reward: 5500,
+      time: 300,
+      heatAfter: { 0: 3 },
+      spawns: { van: { kind: "van", color: 0x2ecc71, ...road(n, 5, 3, 22, 0), heading: 0, drives: false } },
+      steps: [
+        { kind: "enter", target: "van", text: "Угоните зелёный фургон" },
+        { kind: "goto", at: sevaOf(n), radius: 8, vehicle: "van", text: "Довезите фургон до Севы" },
+        { kind: "evade", text: "Оторвитесь от полиции" },
+      ],
+    },
+    {
+      id: "ch7-limo",
+      chapter: 7,
+      contact: office,
+      title: "Кортеж мэра",
+      brief: "Мэр уезжает из города в чёрном фургоне. Его сопровождают три машины охраны, и они таранят. Остановите фургон.",
+      reward: 6500,
+      time: 300,
+      spawns: {
+        limo: { kind: "van", color: 0x0b0c10, ...road(n, 6, 4, 0, 22), heading: V, drives: true },
+        h1: hunter(road(n, 6, 5, 0, 22), V),
+        h2: hunter(road(n, 5, 4, 22, 0), 0),
+        h3: hunter(road(n, 7, 4, -22, 0), Math.PI),
+      },
+      steps: [{ kind: "destroy", target: "limo", text: "Остановите чёрный фургон мэра" }],
+    },
+    {
+      id: "ch7-siege",
+      chapter: 7,
+      contact: office,
+      title: "Штурм офиса",
+      brief: "Люди мэра идут на офис Ники: восемь стрелков и две машины. Держитесь у офиса 50 секунд.",
+      reward: 8000,
+      time: 240,
+      thugs: siege,
+      spawns: { h1: hunter(road(n, 3, 2, 20, 0), Math.PI), h2: hunter(road(n, 1, 4, 0, -20), -V) },
+      steps: [{ kind: "hold", at: office, radius: 20, seconds: 50, text: "Удержите офис" }],
+    },
+    {
+      id: "ch7-finale",
+      chapter: 7,
+      contact: office,
+      title: "Мэрия",
+      brief: "Последний бой. Мэр засел на площади у мэрии с девятью людьми, сам он в пять раз крепче остальных. Уберите всех и уходите: будет погоня.",
+      reward: 40000,
+      thugs: guards,
+      heatAfter: { 0: 4 },
+      steps: [
+        { kind: "clear", targets: Object.keys(guards), text: "Уберите мэра и его людей" },
         { kind: "evade", text: "Оторвитесь от полиции" },
       ],
     },
