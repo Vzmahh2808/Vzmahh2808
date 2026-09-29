@@ -1228,7 +1228,9 @@ function fireShot(gun: Gun, from: Shooter): void {
   for (const t of thugs) if (alive(t.ped) && near(t.ped.x, t.ped.z)) cands.push({ id: id++, x: t.ped.x, z: t.ped.z, thug: t });
   for (const c of cops) if (alive(c.ped) && near(c.ped.x, c.ped.z)) cands.push({ id: id++, x: c.ped.x, z: c.ped.z, cop: c });
   for (const p of peds) if (alive(p) && near(p.x, p.z)) cands.push({ id: id++, x: p.x, z: p.z, ped: p });
-  for (const v of vehicles) if (v !== from.car && !v.state.wrecked && near(v.state.x, v.state.z)) cands.push({ id: id++, x: v.state.x, z: v.state.z, car: v });
+  // A car the mission needs in one piece is never an auto-aim target.
+  const keep = runner.mission?.protect;
+  for (const v of vehicles) if (v !== from.car && !v.state.wrecked && !(keep && v.missionKey === keep) && near(v.state.x, v.state.z)) cands.push({ id: id++, x: v.state.x, z: v.state.z, car: v });
   const t = pickTarget(ox, oz, from.heading, cands, from.range, from.cone, (x, z) => lineOfSight(layout, ox, oz, x, z));
   // On foot, auto-aim turns the shooter to the target.
   if (t && !from.car) player.heading = Math.atan2(t.z - oz, t.x - ox);
@@ -1601,7 +1603,20 @@ function startMission(m: Mission): void {
       if (Math.hypot(thugs[i].ped.x - spec.x, thugs[i].ped.z - spec.z) < 60) removeThug(i);
     }
   }
-  for (const [key, spec] of Object.entries(m.thugs ?? {})) missionThugs.set(key, spawnThug(spec.x, spec.z, spec.heading, key, false));
+  for (const [key, spec] of Object.entries(m.thugs ?? {})) {
+    const t = spawnThug(spec.x, spec.z, spec.heading, key, !!spec.alerted);
+    if (spec.hp) t.hp = spec.hp;
+    missionThugs.set(key, t);
+  }
+  if (m.gift && WEAPONS[m.gift.weapon]) {
+    const { weapon, rounds } = m.gift;
+    const had = guns[weapon];
+    if (had) had.reserve += rounds;
+    else guns[weapon] = new Gun(WEAPONS[weapon], rounds);
+    weaponId = weapon;
+    persist();
+    setTimeout(() => showBanner(had ? `Сева подкинул патронов: +${rounds}` : `У вас ${WEAPONS[weapon].name.toLowerCase()}. ${k("Огонь — ЛКМ или X", "Жмите «Огонь»")}`), 3500);
+  }
   if (m.weather) weather.set(m.weather);
   if (m.chapterTitle) setTimeout(() => showBanner(m.chapterTitle!), 200);
   $("#brief-title").textContent = m.title;

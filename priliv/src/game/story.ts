@@ -1,5 +1,5 @@
 import { PITCH, roadCoord } from "../world/city";
-import type { Mission, Point } from "./missions";
+import type { Mission, Point, ThugSpec } from "./missions";
 import { LIGHTHOUSE } from "../world/island";
 import { REGATTA, REGATTA_TIME, SMUGGLER_ROUTE } from "../world/water";
 
@@ -92,7 +92,7 @@ export function raceMission(n: number): Mission {
 
 /** All chapters in play order. */
 export function storyMissions(n: number): Mission[] {
-  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour(), ...chapterFive(n)];
+  return [...chapterOne(n), ...chapterTwo(n), ...chapterThree(n), ...chapterFour(), ...chapterFive(n), ...chapterSix(n)];
 }
 
 /** Gosha's bar «Якорь», where chapter five is handed out. */
@@ -193,6 +193,123 @@ export function chapterFive(n: number): Mission[] {
     },
   ];
   return list;
+}
+
+/** Seva, a retired detective, meets the player at his old precinct yard. */
+export function sevaOf(n: number): Point {
+  return road(n, 6, 4, 0, PITCH / 2);
+}
+
+/** Thugs along a street from (x, z), `step` metres apart on alternating kerbs. */
+function crew(x: number, z: number, along: "x" | "z", count: number, step: number, heading: number, extra: Partial<ThugSpec> = {}): ThugSpec[] {
+  return Array.from({ length: count }, (_, i) => {
+    const side = i % 2 === 0 ? -5 : 5;
+    return along === "x" ? { x: x + i * step, z: z + side, heading, ...extra } : { x: x + side, z: z + i * step, heading, ...extra };
+  });
+}
+
+function keyed(prefix: string, list: ThugSpec[]): Record<string, ThugSpec> {
+  return Object.fromEntries(list.map((t, i) => [`${prefix}${i + 1}`, t]));
+}
+
+/** A car of the northern crew. */
+function northern(p: Point, heading: number, drives: boolean) {
+  return { kind: "sedan", color: 0x1e5631, x: p.x, z: p.z, heading, drives };
+}
+
+export function chapterSix(n: number): Mission[] {
+  const seva = sevaOf(n);
+  const V = Math.PI / 2;
+  const scouts = keyed("t", crew(roadCoord(n, 7), roadCoord(n, 2) + 20, "z", 3, 10, -V));
+  const guards = keyed("t", [
+    { ...road(n, 2, 7, 8, -5), heading: 0 },
+    { ...road(n, 2, 7, 28, 5), heading: Math.PI },
+    { ...road(n, 2, 7, 36, -5), heading: Math.PI },
+    { ...road(n, 2, 7, 48, 5), heading: Math.PI },
+    { ...road(n, 2, 7, 14, 5), heading: 0 },
+  ]);
+  const wave = keyed("t", [
+    { ...road(n, 6, 5, 5, 20), heading: -V, alerted: true },
+    { ...road(n, 6, 5, -5, 30), heading: -V, alerted: true },
+    { ...road(n, 6, 4, 5, -25), heading: V, alerted: true },
+    { ...road(n, 6, 4, -5, -35), heading: V, alerted: true },
+    { ...road(n, 7, 4, -15, 5), heading: Math.PI, alerted: true },
+    { ...road(n, 7, 4, -25, -5), heading: Math.PI, alerted: true },
+  ]);
+  const last = keyed("t", [...crew(roadCoord(n, 3) + 15, roadCoord(n, 0), "x", 6, 16, V), { ...road(n, 4, 0, 0, 4), heading: V, hp: 220 }]);
+  return [
+    {
+      id: "ch6-arms",
+      chapter: 6,
+      chapterTitle: "Глава 6: Северные",
+      contact: seva,
+      title: "Ствол",
+      brief: "Глава 6. Банду вы разбили, но на её место пришли Северные, и они с оружием. Сева, бывший следователь, даёт вам пистолет. Трое их разведчиков стоят на востоке, начните с них.",
+      reward: 2000,
+      gift: { weapon: "pistol", rounds: 48 },
+      thugs: scouts,
+      area: { at: road(n, 7, 2, 0, PITCH / 2), radius: 160 },
+      steps: [{ kind: "clear", targets: Object.keys(scouts), text: "Уберите разведчиков Северных" }],
+    },
+    {
+      id: "ch6-convoy",
+      chapter: 6,
+      contact: seva,
+      title: "Кортеж",
+      brief: "Три зелёные машины Северных возят оружие по западным кварталам. Догоните и остановите все три. Удобнее всего стрелять прямо из окна.",
+      reward: 3000,
+      time: 300,
+      spawns: {
+        c1: northern(road(n, 1, 2, 20, 0), 0, true),
+        c2: northern(road(n, 1, 3, 20, 0), 0, true),
+        c3: northern(road(n, 2, 1, 0, 20), V, true),
+      },
+      steps: [{ kind: "clear", targets: ["c1", "c2", "c3"], text: "Остановите кортеж: три зелёные машины" }],
+    },
+    {
+      id: "ch6-hostage",
+      chapter: 6,
+      contact: seva,
+      title: "Свидетель",
+      brief: "Северные держат свидетеля Севы в фургоне на северо-западе, под охраной пятерых. Уберите охрану и привезите фургон к Севе. Стреляйте аккуратно: фургон должен уцелеть.",
+      reward: 3500,
+      time: 360,
+      protect: "van",
+      thugs: guards,
+      spawns: { van: { kind: "van", color: 0x6d6875, ...road(n, 2, 7, 22, 0), heading: 0, drives: false } },
+      steps: [
+        { kind: "clear", targets: Object.keys(guards), text: "Уберите охрану фургона" },
+        { kind: "enter", target: "van", text: "Сядьте в фургон со свидетелем" },
+        { kind: "goto", at: seva, radius: 8, vehicle: "van", text: "Довезите свидетеля до Севы" },
+      ],
+    },
+    {
+      id: "ch6-ambush",
+      chapter: 6,
+      contact: seva,
+      title: "Засада",
+      brief: "Северные узнали про Севу и идут к нему: пешие с оружием и две машины. Держитесь во дворе 40 секунд, пока Сева прячет свидетеля.",
+      reward: 4000,
+      time: 180,
+      thugs: wave,
+      spawns: { h1: hunter(road(n, 6, 2, 0, 20), V), h2: hunter(road(n, 4, 5, 20, 0), 0) },
+      steps: [{ kind: "hold", at: seva, radius: 18, seconds: 40, text: "Удержите двор Севы" }],
+    },
+    {
+      id: "ch6-finale",
+      chapter: 6,
+      contact: seva,
+      title: "Северный край",
+      brief: "Их главарь, Бойко, собрал всех на северной окраине. Шесть стрелков и он сам, крепкий, как шкаф. Уберите всех, а потом уходите от полиции: такое не пропустят.",
+      reward: 20000,
+      thugs: last,
+      heatAfter: { 0: 3 },
+      steps: [
+        { kind: "clear", targets: Object.keys(last), text: "Уберите Бойко и его людей" },
+        { kind: "evade", text: "Оторвитесь от полиции" },
+      ],
+    },
+  ];
 }
 
 /** Captain Marta stands on the city marina pier. */
