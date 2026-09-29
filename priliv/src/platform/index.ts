@@ -12,6 +12,8 @@ export interface Platform {
   cloudSave(raw: string): void;
   /** Show a rewarded ad; resolves true if the player watched it to the end. Null where there are no ads. */
   rewarded: (() => Promise<boolean>) | null;
+  /** Show a full-screen ad between scenes. Null where there are no ads. */
+  interstitial: (() => Promise<void>) | null;
   /** Tell the platform whether the player is actively playing (Yandex GameplayAPI). */
   gameplay(on: boolean): void;
   /** The game has loaded and can be played. */
@@ -23,6 +25,7 @@ const web: Platform = {
   cloudLoad: async () => null,
   cloudSave: () => {},
   rewarded: null,
+  interstitial: null,
   gameplay: () => {},
   loaded: () => {},
 };
@@ -103,6 +106,7 @@ async function telegram(): Promise<Platform> {
       cloud.setItem(`${CHUNK_PREFIX}n`, count);
     },
     rewarded: null,
+    interstitial: null,
     gameplay: () => {},
     loaded: () => {},
   };
@@ -118,6 +122,7 @@ interface YaSdk {
   getPlayer(opts?: { scopes?: boolean }): Promise<YaPlayer>;
   adv: {
     showRewardedVideo(opts: { callbacks: { onOpen?: () => void; onRewarded?: () => void; onClose?: () => void; onError?: (e: unknown) => void } }): void;
+    showFullscreenAdv(opts: { callbacks: { onClose?: (shown: boolean) => void; onError?: (e: unknown) => void } }): void;
   };
   features?: { LoadingAPI?: { ready(): void }; GameplayAPI?: { start(): void; stop(): void } };
 }
@@ -150,6 +155,10 @@ async function yandex(): Promise<Platform> {
             onError: () => resolve(false),
           },
         });
+      }),
+    interstitial: () =>
+      new Promise<void>((resolve) => {
+        sdk.adv.showFullscreenAdv({ callbacks: { onClose: () => resolve(), onError: () => resolve() } });
       }),
     gameplay: (on) => {
       if (on === playing) return;
