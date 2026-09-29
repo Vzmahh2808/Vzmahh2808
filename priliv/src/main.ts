@@ -37,7 +37,9 @@ import { ALL_STUNTS_BONUS, RAMPS, STUNT_REWARD, describeJump, finishJump, isClea
 import { buildRamps } from "./world/rampMesh";
 import { BOAT_SPECS, boatForward, boatImpactDamage, boatSpeed, chaseBoat, keepOnWater, makeBoat, separateBoats, stepBoat, type BoatInput, type BoatState } from "./entities/boatPhysics";
 import { buildBoatVisual, syncBoatVisual, type BoatVisual } from "./entities/boatMesh";
-import { Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget } from "./game/weapons";
+import { FISTS, Gun, WEAPONS, WEAPON_ORDER, hitChance, pickTarget, swingInterval, type WeaponSpec } from "./game/weapons";
+import { AIR_TIME, DIG_MESSAGES, DIG_TIME, canDig, climbOut, freshHole, stepHole } from "./game/hiding";
+import { copGivesUp, mayReinforce, pursuitTarget } from "./police/search";
 import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
 import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
 import { platform } from "./platform";
@@ -271,6 +273,8 @@ const heli = new Helicopter(scene);
 let simTime = 0;
 let policeSpawnTimer = 0;
 let lastWarning = -1e9;
+/** Where the police last saw the player; they head there when they lose sight. */
+const lastKnown = { x: 0, z: 0 };
 let roadblockTimer = 8;
 let bustTimer = 0;
 let banner = { text: "", ttl: 0 };
@@ -465,6 +469,8 @@ function isActivePolice(v: Vehicle): boolean {
 
 /** Does any police unit see the point (x, z)? */
 function policeCanSee(x: number, z: number, range = 65): boolean {
+  // Nobody sees a player who is underground.
+  if (hole.hidden && Math.hypot(x - player.x, z - player.z) < 0.6) return false;
   // Darkness and rain make it easier to slip away.
   const carRange = range * visibility;
   for (const v of vehicles) {
@@ -474,7 +480,7 @@ function policeCanSee(x: number, z: number, range = 65): boolean {
   }
   for (const c of cops) {
     if (c.leaving || c.ped.state === "down" || c.ped.state === "gone") continue;
-    if (Math.hypot(c.ped.x - x, c.ped.z - z) < 35) return true;
+    if (Math.hypot(c.ped.x - x, c.ped.z - z) < 35 && lineOfSight(layout, c.ped.x, c.ped.z, x, z)) return true;
   }
   if (policeBoat && !policeBoat.state.sunk && Math.hypot(policeBoat.state.x - x, policeBoat.state.z - z) < 90) return true;
   return heli.active && heli.distanceTo(x, z) < 90;
@@ -566,6 +572,10 @@ function placeRoadblock(): void {
 
 function managePolice(dt: number): void {
   const seen = !player.dead && policeCanSee(player.x, player.z);
+  if (seen) {
+    lastKnown.x = player.x;
+    lastKnown.z = player.z;
+  }
   if (wanted.update(dt, seen)) {
     standDown();
     showBanner("Вы оторвались от полиции");
@@ -589,7 +599,7 @@ function managePolice(dt: number): void {
       pursuers++;
     }
     policeSpawnTimer -= dt;
-    if (pursuers < PURSUERS_BY_STARS[level] && policeSpawnTimer <= 0) {
+    if (pursuers < PURSUERS_BY_STARS[level] && policeSpawnTimer <= 0 && mayReinforce(wanted.unseen)) {
       spawnPursuer();
       policeSpawnTimer = 5;
     }
@@ -643,8 +653,9 @@ function stepCops(dt: number): void {
       stepPed(p, walkGraph, rng, dt, [], collide);
       continue;
     }
-    // A cop gives up on foot once the player drives off.
+    // A cop gives up on foot once the player drives off, or once he has lost him.
     if (((player.vehicle && speedOf(player.vehicle.state) > 9) || player.boat) && d > 25) c.leaving = true;
+    if (copGivesUp(d, wanted.unseen)) c.leaving = true;
     const away = c.leaving || player.dead > 0;
     const ang = away ? Math.atan2(p.z - player.z, p.x - player.x) : Math.atan2(player.z - p.z, player.x - p.x);
     p.heading = ang;
@@ -754,6 +765,33 @@ gunMesh.position.set(0, -0.68, 0.04);
 gunMesh.visible = false;
 playerVis.armR.add(gunMesh);
 const player = { x: 0, z: 0, heading: 0, speed: 0, vehicle: null as Vehicle | null, boat: null as Boat | null, health: 100, dead: 0 };
+/** The hole the player digs to hide in, and how long its mound stays visible after leaving it. */
+const hole = freshHole();
+let holeShown = 0;
+const holeMesh = new THREE.Group();
+{
+  const dirt = new THREE.MeshStandardMaterial({ color: 0x3a2414, roughness: 1 });
+  const pit = new THREE.Mesh(new THREE.CircleGeometry(0.95, 20), new THREE.MeshBasicMaterial({ color: 0x120a05 }));
+  pit.rotation.x = -Math.PI / 2;
+  pit.position.y = 0.04;
+  const mound = new THREE.Mesh(new THREE.SphereGeometry(0.75, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), dirt);
+  mound.scale.set(1.2, 0.35, 0.9);
+  mound.position.set(1.1, 0, 0.5);
+  holeMesh.add(pit, mound);
+  holeMesh.visible = false;
+  scene.add(holeMesh);
+}
+/** A shovel in the player's hand: a long handle with a blade at the end. */
+const shovelMesh = new THREE.Group();
+{
+  const wood = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.95, 0.05), new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.9 }));
+  wood.position.y = -0.5;
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.03), new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.4, metalness: 0.7 }));
+  blade.position.y = -1.05;
+  shovelMesh.add(wood, blade);
+  shovelMesh.visible = false;
+  playerVis.armR.add(shovelMesh);
+}
 
 /** Home is the sidewalk outside the garage. */
 function placeAtStart(): void {
@@ -1178,6 +1216,8 @@ let pendingDeath = false;
 
 function killPlayer(title = "Вы погибли"): void {
   if (player.dead > 0) return;
+  climbOut(hole);
+  playerVis.group.visible = !player.vehicle && !player.boat;
   player.dead = 3.5;
   player.health = 0;
   save.stats.deaths++;
@@ -1224,6 +1264,8 @@ const debugFlags = { noArrest: false };
 
 function arrestPlayer(): void {
   if (player.dead > 0 || debugFlags.noArrest) return;
+  climbOut(hole);
+  playerVis.group.visible = !player.vehicle && !player.boat;
   player.dead = 3.5;
   if (player.vehicle) {
     player.vehicle.input = { throttle: 0, steer: 0, brake: true, handbrake: true };
@@ -1503,16 +1545,149 @@ function cycleWeapon(): void {
   showBanner(weaponId ? WEAPONS[weaponId].name : "Оружие убрано");
 }
 
+let swingCooldown = 0;
+/** simTime of the last melee swing, for the arm animation. */
+let lastSwing = -1e9;
+let lastCopHitCrime = -1e9;
+
+/** A swing with fists or a shovel: hits the best target in reach in front of the player. */
+function meleeStrike(spec: WeaponSpec): void {
+  const ox = player.x;
+  const oz = player.z;
+  lastSwing = simTime;
+  const alive = (p: Ped) => p.state !== "down" && p.state !== "gone";
+  const cands: ShotTarget[] = [];
+  let id = 0;
+  const reach = spec.range + 0.6;
+  const near = (x: number, z: number) => Math.abs(x - ox) < reach && Math.abs(z - oz) < reach;
+  for (const t of thugs) if (alive(t.ped) && near(t.ped.x, t.ped.z)) cands.push({ id: id++, x: t.ped.x, z: t.ped.z, thug: t });
+  for (const c of cops) if (alive(c.ped) && near(c.ped.x, c.ped.z)) cands.push({ id: id++, x: c.ped.x, z: c.ped.z, cop: c });
+  for (const p of peds) if (alive(p) && near(p.x, p.z)) cands.push({ id: id++, x: p.x, z: p.z, ped: p });
+  const t = pickTarget(ox, oz, player.heading, cands, reach, spec.cone);
+  if (!t) return;
+  player.heading = Math.atan2(t.z - oz, t.x - ox);
+  const d = Math.hypot(t.x - ox, t.z - oz) || 1;
+  const dx = (t.x - ox) / d;
+  const dz = (t.z - oz) / d;
+  audio.thud();
+  smoke.emit({ x: t.x - dx * 0.4, y: 1.2, z: t.z - dz * 0.4, vy: 0.6, spread: 0.4, life: 0.45, size0: 0.3, size1: 0.9, color: 0xe6e0d6, alpha: 0.55, drag: 2 });
+  shake = Math.max(shake, 0.12);
+  if (t.ped) {
+    const hp = (pedHp.get(t.ped) ?? 100) - spec.damage;
+    pedHp.set(t.ped, hp);
+    if (hp <= 0) {
+      knockPed(t.ped, dx * 4, dz * 4);
+      pedHp.delete(t.ped);
+    } else scare(t.ped, { x: ox, z: oz }, 6);
+    for (const o of peds) if (alive(o) && Math.hypot(o.x - ox, o.z - oz) < 25) scare(o, { x: ox, z: oz }, 5);
+    crime("assault", t.x, t.z, true);
+  } else if (t.thug) {
+    t.thug.hp -= spec.damage;
+    t.thug.brain.alerted = true;
+    if (t.thug.hp <= 0) {
+      knockPed(t.thug.ped, dx * 4, dz * 4);
+      addMoney(rng.int(20, 60));
+    }
+  } else if (t.cop) {
+    t.cop.hp -= spec.damage;
+    // A cop who gets a shovel in the face lets go: it breaks up an arrest in progress.
+    t.cop.ped.speed = 0;
+    if (t.cop.hp <= 0) knockPed(t.cop.ped, dx * 4, dz * 4);
+    // Assaulting an officer counts, but once per few seconds, not once per blow.
+    if (simTime - lastCopHitCrime > 4) {
+      lastCopHitCrime = simTime;
+      crime("hitCop", t.x, t.z, false);
+    }
+  }
+}
+
+/** Where the hole would go: what the ground under the player is like for digging. */
+function groundKind(x: number, z: number): "asphalt" | "pavement" | "grass" | "water" | "other" {
+  const l = land(x, z);
+  if (l === "water") return "water";
+  if (l === "pier") return "other";
+  if (l === "city") return isOnCarriageway(layout.n, x, z) ? "asphalt" : Math.abs(x) > layout.half + ROAD_WIDTH / 2 || Math.abs(z) > layout.half + ROAD_WIDTH / 2 ? "grass" : "pavement";
+  return "grass";
+}
+
+/** Distance to the nearest cop or police car; infinite when none is out. */
+function nearestPoliceDistance(): number {
+  let best = Infinity;
+  for (const v of vehicles) {
+    if (!isActivePolice(v)) continue;
+    best = Math.min(best, Math.hypot(v.state.x - player.x, v.state.z - player.z));
+  }
+  for (const c of cops) {
+    if (c.ped.state === "down" || c.ped.state === "gone") continue;
+    best = Math.min(best, Math.hypot(c.ped.x - player.x, c.ped.z - player.z));
+  }
+  return best;
+}
+
+let lastDigMessage = -1e9;
+
+/** With a shovel in hand, holding G digs a hole to hide in. */
+function stepDigging(dt: number): void {
+  const shovel = weaponId === "shovel" && !!guns.shovel;
+  const holding = shovel && input.isDown("KeyG");
+  let ok = false;
+  if (holding) {
+    const busy = runner.active && runner.currentStep?.kind !== "evade";
+    const verdict = canDig(groundKind(player.x, player.z), player.speed, nearestPoliceDistance(), busy);
+    if (verdict === "ok") ok = true;
+    else if (simTime - lastDigMessage > 3) {
+      lastDigMessage = simTime;
+      showBanner(DIG_MESSAGES[verdict]);
+    }
+  }
+  const ev = stepHole(hole, dt, ok, Infinity);
+  if (ev === "dug") {
+    hole.x = player.x;
+    hole.z = player.z;
+    player.speed = 0;
+    playerVis.group.visible = false;
+    holeShown = 25;
+    audio.alert();
+    showBanner("Вы под землёй: полиция вас не видит");
+  }
+}
+
+/** Underground: the player waits; the police look for him, and his air runs down. */
+function stepHidden(dt: number): void {
+  player.speed = 0;
+  const ev = stepHole(hole, dt, false, nearestPoliceDistance());
+  const stir = input.isDown("KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight") || input.justPressed("KeyE", "KeyF", "Space") || Math.hypot(input.analog.x, input.analog.y) > 0.3;
+  if (stir && hole.hidden) climbOut(hole);
+  if (!hole.hidden) {
+    playerVis.group.visible = true;
+    holeShown = 25;
+    if (ev === "found") {
+      wanted.unseen = 0;
+      showBanner("Вас нашли!");
+    } else if (ev === "out-of-air") showBanner("Воздух кончился");
+  }
+}
+
 /**
- * Hold fire to shoot. On foot R reloads and aim turns the body; from a car the
+ * Hold fire to strike or shoot. Empty-handed the player punches; with a shovel he
+ * swings it. Guns fire; on foot R reloads and aim turns the body, from a car the
  * shots go out of the window at anything ahead or to the sides, less accurately.
  */
 function stepPlayerGun(dt: number, car: Vehicle | null): void {
   const gun = heldGun();
   for (const g of Object.values(guns)) if (g !== gun) g.update(dt, false);
+  swingCooldown = Math.max(0, swingCooldown - dt);
+  const trigger = input.isDown("Mouse0", "KeyX");
+  const melee = !gun ? FISTS : gun.spec.melee ? gun.spec : null;
+  if (melee) {
+    if (!car && trigger && swingCooldown <= 0) {
+      swingCooldown = swingInterval(melee);
+      meleeStrike(melee);
+    }
+    return;
+  }
   if (!gun) return;
   if (!car && input.justPressed("KeyR") && gun.startReload()) showBanner("Перезарядка…");
-  const trigger = input.isDown("Mouse0", "KeyX");
   if (trigger && gun.total === 0 && input.justPressed("Mouse0", "KeyX")) {
     audio.alert();
     showBanner("Нет патронов. Купите в лавке «Калибр»");
@@ -1596,7 +1771,7 @@ function removeThug(i: number): void {
 function stepThugs(dt: number): void {
   const collide = (x: number, z: number) => walkBlock(x, z, 0.35);
   const heard = simTime - lastShot < 0.25;
-  const target = player.dead > 0 || player.boat ? null : player;
+  const target = player.dead > 0 || player.boat || hole.hidden ? null : player;
   for (let i = thugs.length - 1; i >= 0; i--) {
     const t = thugs[i];
     const p = t.ped;
@@ -1684,22 +1859,23 @@ function openGunShop(): void {
     // Some guns come on sale only after a story mission.
     if (w.unlock && !save.missionsDone.includes(w.unlock)) continue;
     const g = guns[id];
+    if (g && w.melee) continue;
     if (!g) {
       items.push({
         label: w.name,
-        note: `${w.rate} выстр./с · магазин ${w.magazine} · в комплекте 3 магазина`,
+        note: w.melee ? `бьёт на ${w.damage} урона, достаёт на ${w.range} м. С ней можно копать укрытие (G)` : `${w.rate} выстр./с · магазин ${w.magazine} · в комплекте 3 магазина`,
         price: w.price,
         action: () => {
           if (save.money < w.price || guns[id]) return;
-          const first = Object.keys(guns).length === 0;
+          const first = Object.values(guns).every((q) => q.spec.melee);
           addMoney(-w.price);
           guns[id] = new Gun(w, w.magazine * 3);
           weaponId = id;
           persist();
           openGunShop();
           audio.alert();
-          showBanner(`Куплено: ${w.name}. ${k("Огонь — ЛКМ или X, Q — сменить", "Жмите «Огонь»")}`);
-          if (first) setTimeout(() => showBanner("На карте появились притоны банды: метки Б"), 4000);
+          showBanner(w.melee ? `Куплено: ${w.name}. ${k("ЛКМ или X — ударить, G (держать) — копать укрытие", "Жмите «Удар» и «Копать»")}` : `Куплено: ${w.name}. ${k("Огонь — ЛКМ или X, Q — сменить", "Жмите «Огонь»")}`);
+          if (first && !w.melee) setTimeout(() => showBanner("На карте появились притоны банды: метки Б"), 4000);
         },
       });
     } else {
@@ -2393,7 +2569,7 @@ const insideHideout: Record<string, boolean> = {};
 
 /** Hideouts show up once the player owns a gun. */
 function hideoutOpen(id: string): boolean {
-  return Object.keys(guns).length > 0 && !save.hideouts.includes(id);
+  return Object.values(guns).some((g) => !g.spec.melee) && !save.hideouts.includes(id);
 }
 
 function updateHideouts(): void {
@@ -2851,6 +3027,8 @@ function update(dt: number, now: number): void {
     b.input.throttle = input.mixed(["KeyS", "ArrowDown"], ["KeyW", "ArrowUp"], input.analog.y);
     b.input.steer = input.mixed(["KeyA", "ArrowLeft"], ["KeyD", "ArrowRight"], input.analog.x);
     if (input.justPressed("KeyE", "KeyF") && boatSpeed(b.state) < 4 && !exitBoat()) showBanner("Подплывите ближе к берегу или причалу");
+  } else if (hole.hidden) {
+    stepHidden(dt);
   } else {
     const stickMag = Math.hypot(input.analog.x, input.analog.y);
     const run = input.isDown("ShiftLeft", "ShiftRight") || stickMag > 0.92;
@@ -2899,6 +3077,7 @@ function update(dt: number, now: number): void {
       }
     }
     stepPlayerGun(dt, null);
+    stepDigging(dt);
     const near = nearestEnterable();
     const boat = nearestBoat();
     if (input.justPressed("KeyE", "KeyF")) {
@@ -2922,7 +3101,7 @@ function update(dt: number, now: number): void {
     }
     if (v.police && v !== player.vehicle && !s.wrecked && !s.burning) {
       if (v.police.mode === "pursuit" && !player.dead) {
-        v.input = policeDrive(s, v.police, layout, playerTarget(), dt);
+        v.input = policeDrive(s, v.police, layout, pursuitTarget(playerTarget(), lastKnown, wanted.unseen), dt);
         // Drop a cop off when the player is on foot nearby.
         if (!player.vehicle && !v.police.copOut && speedOf(s) < 5 && Math.hypot(s.x - player.x, s.z - player.z) < 16) {
           const door = sideDoor(s, 2.2);
@@ -3291,10 +3470,19 @@ function syncVisuals(dt: number): void {
     playerVis.group.rotation.y = -player.heading + Math.PI / 2;
     animatePedestrian(playerVis, player.dead > 0 ? 0 : player.speed, dt, player.dead > 0 ? 1 : 0);
     const gun = heldGun();
-    gunMesh.visible = !!gun;
+    gunMesh.visible = !!gun && !gun.spec.melee;
+    shovelMesh.visible = weaponId === "shovel" && !!guns.shovel;
     // Aiming: the gun arm comes up while shooting and for a moment after.
-    if (gun && !player.dead && (simTime - lastShot < 1.2 || input.isDown("Mouse0", "KeyX"))) playerVis.armR.rotation.x = -Math.PI / 2;
+    if (gun && !gun.spec.melee && !player.dead && (simTime - lastShot < 1.2 || input.isDown("Mouse0", "KeyX"))) playerVis.armR.rotation.x = -Math.PI / 2;
+    // A swing: the arm goes up and comes down over a quarter of a second.
+    const sw = simTime - lastSwing;
+    if (sw < 0.28 && !player.dead) playerVis.armR.rotation.x = -2.6 + (sw / 0.28) * 2.2;
+    // A shovel is carried at the ready.
+    else if (shovelMesh.visible && !player.dead) playerVis.armR.rotation.x = -0.9;
   }
+  if (holeShown > 0) holeShown -= hole.hidden ? 0 : dt;
+  holeMesh.visible = hole.hidden || holeShown > 0;
+  if (holeMesh.visible) holeMesh.position.set(hole.x, ground(hole.x, hole.z) + 0.03, hole.z);
   fadeTracers(dt);
   for (const b of boats) syncBoatVisual(b.visual, b.state, dt, simTime, b.police && wanted.level > 0);
   smoke.update(dt);
@@ -3356,16 +3544,31 @@ function updateHud(): void {
   else if (bustTimer > 0.2) hintEl.textContent = "Вас задерживают! Уезжайте или бегите";
   else if (nearestBoat() && !nearestEnterable()) hintEl.textContent = k("E — сесть в катер", "Жмите «Сесть»");
   else if (nearestEnterable()) hintEl.textContent = k("E — сесть в машину", "Жмите «Сесть»");
+  else if (hole.hidden) hintEl.textContent = `Вы под землёй, воздуха ещё ${Math.ceil(hole.air)} с. Любое движение — вылезти`;
+  else if (weaponId === "shovel") hintEl.textContent = touch.enabled ? "" : "ЛКМ или X — удар · G (держать) — копать укрытие · Q — сменить";
   else if (heldGun()) hintEl.textContent = touch.enabled ? "" : "ЛКМ или X — огонь · R — перезарядка · Q — убрать";
-  else hintEl.textContent = touch.enabled ? "" : "WASD — идти · Shift — бежать";
+  else hintEl.textContent = touch.enabled ? "" : "WASD — идти · Shift — бежать · ЛКМ или X — ударить";
   const gun = heldGun();
-  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, !!gun && !boat);
-  weaponEl.classList.toggle("show", !!gun && !boat && !player.dead);
+  const onFoot = !v && !boat;
+  const digger = weaponId === "shovel" && !!guns.shovel && onFoot;
+  const attackLabel = v ? (gun && !gun.spec.melee ? "Огонь" : null) : boat ? null : gun ? (gun.spec.melee ? "Удар" : "Огонь") : "Удар";
+  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, attackLabel, digger);
+  const showWeapon = !boat && !player.dead && (!!gun || onFoot);
+  weaponEl.classList.toggle("show", showWeapon && !!gun);
   if (gun) {
-    const txt = `${gun.spec.name} · ${gun.reloading > 0 ? "перезарядка" : gun.mag} / ${gun.reserve}`;
+    const txt = gun.spec.melee ? gun.spec.name : `${gun.spec.name} · ${gun.reloading > 0 ? "перезарядка" : gun.mag} / ${gun.reserve}`;
     if (weaponEl.textContent !== txt) weaponEl.textContent = txt;
-    weaponEl.classList.toggle("empty", gun.total === 0);
+    weaponEl.classList.toggle("empty", !gun.spec.melee && gun.total === 0);
   }
+  // Digging progress and the air underground.
+  const digEl = $<HTMLDivElement>("#dig");
+  const digging = hole.dig > 0.05 && !hole.hidden;
+  digEl.classList.toggle("show", digging || hole.hidden);
+  if (digging || hole.hidden) {
+    (digEl.firstElementChild as HTMLElement).style.width = `${Math.round((hole.hidden ? hole.air / AIR_TIME : hole.dig / DIG_TIME) * 100)}%`;
+    digEl.classList.toggle("air", hole.hidden);
+  }
+  document.body.classList.toggle("underground", hole.hidden);
   // A ring nearby explains itself, unless something urgent is on screen. Before the first
   // mission is done, point at where to start.
   if (player.dead <= 0 && !(v && v.state.burning) && bustTimer <= 0.2) {
@@ -3579,6 +3782,11 @@ if (location.search.includes("debug")) {
     hideouts: HIDEOUTS,
     missionThugs,
     exportAt: EXPORT_AT,
+    hole,
+    isRoad: (x: number, z: number) => isOnCarriageway(layout.n, x, z),
+    lastKnown,
+    holeVisible: () => holeMesh.visible,
+    spawnPursuer,
     lamps: layout.lamps,
     ads,
     lowQuality: () => lowQuality,

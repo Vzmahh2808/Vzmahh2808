@@ -1,4 +1,4 @@
-export type Crime = "hitPed" | "carjack" | "stealCop" | "ramCop" | "hitCop" | "explosion" | "killCop" | "shooting" | "shootPed";
+export type Crime = "hitPed" | "carjack" | "stealCop" | "ramCop" | "hitCop" | "explosion" | "killCop" | "shooting" | "shootPed" | "assault";
 
 export const CRIME_HEAT: Record<Crime, number> = {
   hitPed: 1,
@@ -10,6 +10,8 @@ export const CRIME_HEAT: Record<Crime, number> = {
   killCop: 12,
   shooting: 1,
   shootPed: 3,
+  /** Punching or clubbing a bystander. */
+  assault: 0.7,
 };
 
 /**

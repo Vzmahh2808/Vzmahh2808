@@ -31,6 +31,7 @@
           <button class="tbtn big enter" data-key="KeyE">Сесть</button>
           <button class="tbtn big car" data-key="Space" data-hold="1">Ручник</button>
           <button class="tbtn big gun" data-key="KeyX" data-hold="1">Огонь</button>
+          <button class="tbtn dig" data-key="KeyG" data-hold="1">Копать</button>
           <button class="tbtn foot" data-key="ShiftLeft" data-hold="1">Бег</button>
           <button class="tbtn foot" data-key="KeyQ">Оружие</button>
           <button class="tbtn car" data-key="KeyH" data-hold="1">Сигнал</button>
@@ -83,6 +84,7 @@
       <div id="carhp" class="hud"><div class="fill"></div></div>
       <div id="speed" class="hud"><div class="num">0</div><div class="unit">КМ/Ч</div></div>
       <div id="death" class="hud"><div>Вы погибли</div><small>Возвращение в город…</small></div>
+      <div id="dig" class="hud"><div></div></div>
       <div id="hint" class="hud"></div>
       <canvas id="minimap" width="200" height="200"></canvas>
       <div id="start">
@@ -97,7 +99,9 @@
             <kbd>E</kbd><span>Сесть в машину / выйти</span>
             <kbd>Пробел</kbd><span>Ручной тормоз</span>
             <kbd>ЛКМ / X</kbd><span>Стрелять (пешком и из окна машины)</span>
-            <kbd>Q</kbd><span>Сменить или убрать оружие</span>
+            <kbd>Q</kbd><span>Сменить оружие или убрать его</span>
+            <kbd>ЛКМ / X без оружия</kbd><span>Ударить кулаком</span>
+            <kbd>G (держать)</kbd><span>С лопатой: копать укрытие, где вас не видит полиция</span>
             <kbd>H</kbd><span>Сигнал</span>
             <kbd>C</kbd><span>Сменить камеру</span>
             <kbd>R</kbd><span>Радио в машине, перезарядка пешком</span>
