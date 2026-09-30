@@ -25,7 +25,7 @@ import { MissionRunner, type Mission, type MissionEvent } from "./game/missions"
 import { places, raceMission, regattaMission, storyMissions } from "./game/story";
 import { RIVAL_COLORS, RIVAL_NAMES, RaceStandings, gridSlot, makeRacer, racerInput, raceCheckpoints, streetRaceMission, tracks, type Racer, type Track } from "./game/streetRace";
 import { businesses, buyBusiness, collect, hourlyIncome, raidMission, stateOf, tick as tickBusiness, type Business } from "./game/business";
-import { MOD_SHOP, SHOP, buy, makeCourierRun, makeTaxiFare, taxiFare, type TaxiFare } from "./game/jobs";
+import { MOD_SHOP, SHOP, buy, makeCourierRun, makeMedicCall, makeTaxiFare, medicPay, taxiFare, type TaxiFare } from "./game/jobs";
 import { BeamMarker, TargetArrow, ZoneMarker } from "./fx/markers";
 import { SECONDS_PER_HOUR, formatClock, lerpColor, lightingAt, wrapHour } from "./world/timeOfDay";
 import { WEATHER_NAMES, Weather, type WeatherKind } from "./world/weather";
@@ -1955,6 +1955,35 @@ function openClothes(): void {
   openMenu(seen ? "Магазин «Лоск» (снаружи полиция)" : wanted.level > 0 ? "Магазин «Лоск»: переоденьтесь, и вас не узнают" : "Магазин «Лоск»", items);
 }
 
+// ---------------------------------------------------------------- hospital and ambulance
+
+const hospitalMarker = new ZoneMarker(scene, 0xff7675, "+", 5, "Больница");
+hospitalMarker.show(PLACES.hospital.x, PLACES.hospital.z);
+const HEAL_FEE = 40;
+
+function ambulanceAlive(): boolean {
+  return vehicles.some((q) => q.kind === "ambulance" && !q.state.wrecked);
+}
+function parkAmbulance(): void {
+  if (ambulanceAlive()) return;
+  const lot = PLACES.ambulanceLot;
+  addVehicle(makeCar(lot.x, lot.z, lot.heading), "ambulance", 0xf5f6fa, null);
+}
+parkAmbulance();
+
+function visitHospital(): void {
+  parkAmbulance();
+  if (player.health >= 99) {
+    showBanner(ambulanceAlive() ? "Больница. Скорая ждёт у входа: сядьте и жмите J" : "Больница");
+    return;
+  }
+  const fee = Math.min(HEAL_FEE, save.money);
+  if (fee > 0) addMoney(-fee);
+  player.health = 100;
+  audio.coin();
+  showBanner(fee > 0 ? `Вас подлатали: −$${fee}` : "Вас подлатали бесплатно");
+}
+
 // ---------------------------------------------------------------- missions, garage, paint shop
 
 const STORY = storyMissions(layout.n);
@@ -1985,7 +2014,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, clothes: false, export: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, clothes: false, hospital: false, export: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -2130,8 +2159,9 @@ function handleMissionEvents(events: MissionEvent[]): void {
           showBanner(prize ? `${place} место из 4 · +$${prize}` : "4 место из 4 · без приза");
           break;
         }
-        if (e.mission.id === "taxi" && taxi?.fare) {
-          const pay = taxiFare(taxi.fare.distance, (e.mission.time ?? 0) - e.time, e.mission.time ?? 0);
+        if ((e.mission.id === "taxi" || e.mission.id === "medic") && taxi?.fare) {
+          const left = (e.mission.time ?? 0) - e.time;
+          const pay = taxi.kind === "medic" ? medicPay(taxi.fare.distance, left, e.mission.time ?? 0, taxi.fares) : taxiFare(taxi.fare.distance, left, e.mission.time ?? 0);
           addMoney(pay);
           taxi.fares++;
           taxi.earned += pay;
@@ -2141,7 +2171,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
           }
           persist();
           endMission();
-          showBanner(`Поездка оплачена: +$${pay}`);
+          showBanner(taxi.kind === "medic" ? `Пациент сдан врачам: +$${pay}` : `Поездка оплачена: +$${pay}`);
           setTimeout(() => {
             if (taxi && !runner.active) nextFare();
           }, 1500);
@@ -2292,11 +2322,12 @@ function updateMissions(dt: number): void {
   // Ammo is for sale mid-mission too.
   if (entered("gunShop", PLACES.gunShop.x, PLACES.gunShop.z, 4, !v && !player.boat)) openGunShop();
   if (entered("clothes", PLACES.clothes.x, PLACES.clothes.z, 4, !v && !player.boat)) openClothes();
+  if (entered("hospital", PLACES.hospital.x, PLACES.hospital.z, 5, !v && !player.boat && !runner.active)) visitHospital();
   if (!runner.active && v && entered("depot", PLACES.depot.x, PLACES.depot.z, 6, speedOf(v.state) < 4)) {
     startMission(makeCourierRun(rng, roadPoints, PLACES.depot));
   }
-  if (v && !runner.active && v.kind === "taxi" && input.justPressed("KeyJ")) startTaxiShift();
-  if (taxi && runner.active && runner.mission?.id === "taxi" && (!v || v.kind !== "taxi")) failMission("вы вышли из такси");
+  if (v && !runner.active && (v.kind === "taxi" || v.kind === "ambulance") && input.justPressed("KeyJ")) startTaxiShift(v.kind === "ambulance" ? "medic" : "taxi");
+  if (taxi && runner.active && (runner.mission?.id === "taxi" || runner.mission?.id === "medic") && (!v || v.kind !== (taxi.kind === "medic" ? "ambulance" : "taxi"))) failMission(taxi.kind === "medic" ? "вы бросили скорую" : "вы вышли из такси");
   if ((runner.mission?.id === REGATTA_M.id || runner.mission?.id === "boat-cargo") && !player.boat) failMission("вы покинули катер");
   if (entered("export", EXPORT_AT.x, EXPORT_AT.z, 6, !player.boat && (!v || speedOf(v.state) < 3))) visitExport(v);
 
@@ -2342,17 +2373,18 @@ function visitExport(v: Vehicle | null): void {
 
 const roadPoints: Array<{ x: number; z: number }> = layout.intersections.map((it) => ({ x: it.x, z: it.z }));
 const curbside = walkGraph.nodes;
-let taxi: { fares: number; earned: number; fare: TaxiFare | null; passenger: Ped | null } | null = null;
+let taxi: { kind: "taxi" | "medic"; fares: number; earned: number; fare: TaxiFare | null; passenger: Ped | null } | null = null;
 
-function startTaxiShift(): void {
-  taxi = { fares: 0, earned: 0, fare: null, passenger: null };
-  showBanner("Смена такси началась");
+function startTaxiShift(kind: "taxi" | "medic" = "taxi"): void {
+  taxi = { kind, fares: 0, earned: 0, fare: null, passenger: null };
+  showBanner(kind === "medic" ? "Смена скорой началась: ждите вызов" : "Смена такси началась");
   nextFare();
 }
 
 function nextFare(): void {
   if (!taxi || !player.vehicle) return;
-  const fare = makeTaxiFare(rng, curbside, { x: player.x, z: player.z });
+  const from = { x: player.x, z: player.z };
+  const fare = taxi.kind === "medic" ? makeMedicCall(rng, curbside, from, PLACES.hospital) : makeTaxiFare(rng, curbside, from);
   taxi.fare = fare;
   // Put a waiting passenger at the kerb.
   const p = peds.find((q) => q.state === "gone") ?? peds.reduce((a, b) => (Math.hypot(a.x - player.x, a.z - player.z) > Math.hypot(b.x - player.x, b.z - player.z) ? a : b));
@@ -2372,7 +2404,7 @@ function endTaxiShift(reason: string): void {
   if (taxi.passenger && taxi.passenger.state === "wait") taxi.passenger.state = "walk";
   const t = taxi;
   taxi = null;
-  showBanner(`Смена окончена: ${reason}. Заказов ${t.fares}, заработано $${t.earned}`);
+  showBanner(`Смена окончена: ${reason}. ${t.kind === "medic" ? "Вызовов" : "Заказов"} ${t.fares}, заработано $${t.earned}`);
 }
 
 interface MenuItem {
@@ -2543,7 +2575,7 @@ function syncMissionVisuals(dt: number): void {
   }
   syncBusinessMarkers(dt);
   syncHideoutMarkers(dt);
-  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, clothesMarker, exportMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, clothesMarker, hospitalMarker, exportMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- businesses
@@ -3504,7 +3536,7 @@ function syncVisuals(dt: number): void {
     const onSlope = !v.air.airborne && r && v.air.y > 0 ? Math.atan2(r.height, r.length) * Math.cos(v.state.heading - r.heading) : 0;
     const pitch = v.air.airborne ? Math.max(-0.5, Math.min(0.4, Math.atan2(v.air.vy, Math.max(4, speedOf(v.state))))) : onSlope;
     v.visual.group.rotation.z += (pitch - v.visual.group.rotation.z) * Math.min(1, dt * 10);
-    flashSiren(v.visual, !!v.police && v.police.mode !== "patrol" && !v.state.wrecked && v !== player.vehicle, simTime);
+    flashSiren(v.visual, v.kind === "ambulance" ? !!taxi && taxi.kind === "medic" && runner.active && v === player.vehicle && !v.state.wrecked : !!v.police && v.police.mode !== "patrol" && !v.state.wrecked && v !== player.vehicle, simTime);
     emitVehicleFx(v, dt);
   }
   for (let i = 0; i < peds.length; i++) {
@@ -3729,6 +3761,7 @@ function nearbyPlaceHint(): string | null {
     { ...PLACES.paint, text: "«Мастерская»: заедьте на машине — ремонт, покраска и тюнинг" },
     { ...PLACES.shop, text: "«Автосалон»: подойдите или подъедьте, чтобы купить машину" },
     { ...PLACES.gunShop, text: "«Оружейная»: подойдите пешком, чтобы купить оружие и патроны" },
+    { ...PLACES.hospital, text: `«Больница»: пешком — лечение за $${HEAL_FEE}. Скорая у входа: сядьте и жмите J, чтобы возить пострадавших` },
     { ...PLACES.clothes, text: "«Лоск»: одежда. Если вас не видит полиция, новый образ снимает розыск" },
     { ...EXPORT_AT, text: `«Экспорт машин»: заедьте на угнанной машине из списка, вам заплатят. Ищут: ${exportWanted()}` },
   ];
@@ -3770,6 +3803,7 @@ function updateHud(): void {
   if (player.dead > 0) hintEl.textContent = "";
   else if (v && v.state.burning) hintEl.textContent = speedOf(v.state) < 6 ? k("Машина горит! E — выйти", "Машина горит! Жмите «Сесть», чтобы выйти") : "Машина горит! Тормозите и выходите";
   else if (v && v.kind === "taxi" && !runner.active) hintEl.textContent = k("J — начать смену такси", "Жмите «Работа», чтобы взять заказы");
+  else if (v && v.kind === "ambulance" && !runner.active) hintEl.textContent = k("J — начать смену скорой", "Жмите «Работа», чтобы взять вызовы");
   else if (v) hintEl.textContent = touch.enabled ? "" : speedOf(v.state) < 6 ? `E — выйти · Пробел — ручник · H — сигнал · R — радио${heldGun() ? " · X — огонь" : ""}` : heldGun() ? "ЛКМ или X — стрелять из окна · Пробел — ручник" : "Пробел — ручник · C — камера";
   else if (boat) {
     const docked = boatSpeed(boat.state) < 4 && landingSpot(boat) !== null;
@@ -3786,7 +3820,7 @@ function updateHud(): void {
   const onFoot = !v && !boat;
   const digger = weaponId === "shovel" && !!guns.shovel && onFoot;
   const attackLabel = v ? (gun && !gun.spec.melee ? "Огонь" : null) : boat ? null : gun ? (gun.spec.melee ? "Удар" : "Огонь") : "Удар";
-  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && v.kind === "taxi" && !runner.active, attackLabel, digger);
+  touch.setMode(!!v || !!boat, !!nearestEnterable() || !!nearestBoat(), !!v && (v.kind === "taxi" || v.kind === "ambulance") && !runner.active, attackLabel, digger);
   const showWeapon = !boat && !player.dead && (!!gun || onFoot);
   weaponEl.classList.toggle("show", showWeapon && !!gun);
   if (gun) {
@@ -3823,7 +3857,7 @@ function updateHud(): void {
   briefEl.classList.toggle("show", briefTimer > 0 && runner.active);
   const left = runner.timeLeft;
   const timer = left === null ? "" : `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
-  let jobTitle = taxi && runner.mission?.id === "taxi" ? `Такси · заказ ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
+  let jobTitle = taxi && (runner.mission?.id === "taxi" || runner.mission?.id === "medic") ? `${taxi.kind === "medic" ? "Скорая · вызов" : "Такси · заказ"} ${taxi.fares + 1} · $${taxi.earned}` : runner.mission?.title ?? "";
   if (street && runner.mission === street.mission) {
     const place = street.standings.place("player", racePositions());
     const lap = Math.min(street.track.laps, Math.floor(runner.checkpoint / street.track.points.length) + 1);
@@ -3881,6 +3915,7 @@ function updateHud(): void {
     { ...PLACES.paint, color: "#48dbfb", label: "П", name: "Мастерская" },
     { ...PLACES.shop, color: "#c56cf0", label: "А", name: "Автосалон" },
     { ...PLACES.gunShop, color: "#e17055", label: "О", name: "Оружейная" },
+    { ...PLACES.hospital, color: "#ff7675", label: "+", name: "Больница" },
     { ...PLACES.clothes, color: "#fd79a8", label: "Н", name: "Одежда" },
     { ...EXPORT_AT, color: "#00b894", label: "Э", name: "Экспорт машин" },
   ];

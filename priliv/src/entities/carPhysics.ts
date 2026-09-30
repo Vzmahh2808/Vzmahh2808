@@ -46,6 +46,8 @@ export const CAR_SPECS: Record<string, CarSpec> = {
   taxi: { maxSpeed: 44, maxReverse: 10, accel: 9.5, brake: 22, drag: 0.6, steerMax: 0.55, wheelBase: 2.7, grip: 6, handbrakeGrip: 1.2, mass: 1350, length: 4.5, width: 1.9 },
   police: { maxSpeed: 52, maxReverse: 12, accel: 13, brake: 26, drag: 0.55, steerMax: 0.55, wheelBase: 2.7, grip: 6.5, handbrakeGrip: 1.2, mass: 1500, length: 4.6, width: 1.95 },
   pickup: { maxSpeed: 38, maxReverse: 9, accel: 8, brake: 20, drag: 0.7, steerMax: 0.58, wheelBase: 3.0, grip: 5.5, handbrakeGrip: 1.3, mass: 1700, length: 5.0, width: 2.0 },
+  // Ambulance: a heavy van that is quick off the mark; never part of ordinary traffic.
+  ambulance: { maxSpeed: 44, maxReverse: 9, accel: 9, brake: 22, drag: 0.7, steerMax: 0.58, wheelBase: 3.2, grip: 5.8, handbrakeGrip: 1.4, mass: 2200, length: 5.3, width: 2.1 },
   // Motorcycle: quick, nimble and slim, so it slips between cars, but it has nothing to hide behind.
   bike: { maxSpeed: 54, maxReverse: 6, accel: 16, brake: 28, drag: 0.55, steerMax: 0.42, wheelBase: 2.2, grip: 8, handbrakeGrip: 1.6, mass: 260, length: 2.2, width: 0.8 },
 };

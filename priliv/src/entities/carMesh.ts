@@ -103,7 +103,8 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   const body = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.3 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.8 });
 
-  const chassisH = kind === "van" ? 0.7 : 0.55;
+  const vanLike = kind === "van" || kind === "ambulance";
+  const chassisH = vanLike ? 0.7 : 0.55;
   const chassis = new THREE.Mesh(new THREE.BoxGeometry(L, chassisH, W), body);
   chassis.position.y = 0.45 + chassisH / 2;
   chassis.castShadow = true;
@@ -113,7 +114,7 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   let cabL = L * 0.5;
   let cabX = -L * 0.05;
   let cabH = 0.7;
-  if (kind === "van") {
+  if (vanLike) {
     cabL = L * 0.85;
     cabX = -L * 0.05;
     cabH = 0.9;
@@ -221,6 +222,27 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
     const blue = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenBlue);
     blue.position.set(cabX, roofY + 0.18, W * 0.19);
     shell.add(red, blue);
+  }
+  if (kind === "ambulance") {
+    const roofY = 0.45 + chassisH + cabH;
+    const red = new THREE.MeshStandardMaterial({ color: 0xd63031, roughness: 0.5 });
+    for (const sgn of [-1, 1]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(L * 0.9, 0.16, 0.02), red);
+      stripe.position.set(0, 0.45 + chassisH * 0.5, sgn * (W / 2 + 0.01));
+      shell.add(stripe);
+      const crossA = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.2, 0.02), red);
+      const crossB = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.7, 0.02), red);
+      crossA.position.set(-L * 0.12, 0.45 + chassisH + cabH * 0.55, sgn * (W * 0.43 + 0.01));
+      crossB.position.copy(crossA.position);
+      shell.add(crossA, crossB);
+    }
+    visual.sirenRed = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.1 });
+    visual.sirenBlue = new THREE.MeshStandardMaterial({ color: 0x000055, emissive: 0x2a5bff, emissiveIntensity: 0.1 });
+    const r = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenRed);
+    r.position.set(cabX + L * 0.3, roofY + 0.1, -W * 0.19);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenBlue);
+    b.position.set(cabX + L * 0.3, roofY + 0.1, W * 0.19);
+    shell.add(r, b);
   }
   return visual;
 }

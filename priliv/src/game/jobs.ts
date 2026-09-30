@@ -55,6 +55,37 @@ export function makeTaxiFare(rng: Rng, curbside: Point[], from: Point): TaxiFare
   };
 }
 
+/** Ambulance pay: flat call-out plus distance, with more for a fast run. */
+export function medicPay(distance: number, timeLeft: number, timeTotal: number, streak: number): number {
+  const base = 70 + distance * 0.9;
+  const speedBonus = timeTotal > 0 ? Math.max(0, timeLeft / timeTotal) * 0.6 : 0;
+  return Math.round(base * (1 + speedBonus) * (1 + Math.min(streak, 5) * 0.1));
+}
+
+/** One emergency call: reach the injured person fast, then rush them to the hospital. */
+export function makeMedicCall(rng: Rng, curbside: Point[], from: Point, hospital: Point): TaxiFare {
+  const pickup = pickPoint(rng, curbside, from, 70, 240);
+  const distance = Math.hypot(hospital.x - pickup.x, hospital.z - pickup.z);
+  // Tighter than a taxi fare: a life is at stake.
+  const time = Math.round((fareTime(Math.hypot(pickup.x - from.x, pickup.z - from.z)) + fareTime(distance)) * 0.85);
+  return {
+    pickup,
+    dropoff: hospital,
+    distance,
+    mission: {
+      id: "medic",
+      title: "Скорая",
+      brief: "",
+      reward: 0,
+      time,
+      steps: [
+        { kind: "goto", at: pickup, radius: 9, vehicle: "any", stop: true, text: "Вызов: пострадавший у обочины. Остановитесь рядом" },
+        { kind: "goto", at: hospital, radius: 10, vehicle: "any", stop: true, text: "Быстро в больницу («+» на карте)" },
+      ],
+    },
+  };
+}
+
 /** Courier run: three drops in a row against the clock. */
 export function makeCourierRun(rng: Rng, points: Point[], depot: Point): Mission {
   const drops: Point[] = [];
