@@ -1,5 +1,7 @@
 import { randomSeed } from "./core/rng";
 import { Sound } from "./audio/sound";
+import { AdPolicy, boosted } from "./game/ads";
+import { platform } from "./platform";
 import {
   advanceDay,
   createSeason,
@@ -39,6 +41,11 @@ new ResizeObserver(() => view.resize()).observe(canvas);
 window.addEventListener("resize", () => view.resize());
 
 let season: Season | null = loadSeason();
+const ads = new AdPolicy();
+const sessionStart = performance.now();
+const sessionTime = (): number => (performance.now() - sessionStart) / 1000;
+/** A rewarded boost waiting for the next championship match. */
+let boostNext = false;
 let match: Match | null = null;
 let cfg: MatchConfig | null = null;
 let teams: [Team, Team] | null = null;
@@ -80,7 +87,8 @@ const screens = new Screens(
     },
     leaguePlay: () => leaguePlay(),
     leagueSim: (kind) => leagueSim(kind),
-    leagueContinue: () => leagueContinue(),
+    leagueContinue: () => void leagueContinue(),
+    leagueBoost: () => void leagueBoost(),
     leagueDiscard: () => {
       season = null;
       saveSeason(null);
@@ -91,8 +99,38 @@ const screens = new Screens(
 );
 screens.hasSeason = season !== null;
 
+function refreshBoost(): void {
+  screens.boost = boostNext ? "active" : platform().rewarded && ads.rewardAllowed(sessionTime()) ? "available" : "none";
+}
+
 function showHub(): void {
+  refreshBoost();
   if (season) screens.hub(season);
+}
+
+/** Show an ad with the sound off; resolves true when a rewarded ad was watched to the end. */
+async function playAd(kind: "rewarded" | "interstitial"): Promise<boolean> {
+  const p = platform();
+  const show = kind === "rewarded" ? p.rewarded : p.interstitial;
+  if (!show) return false;
+  sound.setSuspended(true);
+  p.gameplay(false);
+  let got = false;
+  try {
+    if (kind === "rewarded") got = await p.rewarded!();
+    else await p.interstitial!();
+  } catch {
+    got = false;
+  }
+  sound.setSuspended(false);
+  ads.noteAd(sessionTime(), kind === "rewarded");
+  return got;
+}
+
+async function leagueBoost(): Promise<void> {
+  if (!season || boostNext) return;
+  if (await playAd("rewarded")) boostNext = true;
+  showHub();
 }
 
 function leaguePlay(): void {
@@ -119,7 +157,7 @@ function leagueSim(kind: "match" | "days" | "phase" | "season"): void {
 }
 
 /** Record the finished match in the season and go back to the hub. */
-function leagueContinue(): void {
+async function leagueContinue(): Promise<void> {
   if (!season || !match || !cfg?.league || match.decidedBy === null) return;
   const so = match.decidedBy === "so";
   const userGoals = match.score[0] + (so && match.winner === 0 ? 1 : 0);
@@ -132,6 +170,8 @@ function leagueContinue(): void {
   hud.hide();
   document.body.classList.remove("in-match");
   sound.update(0, null);
+  // A natural break: the match is over and the player is between screens.
+  if (platform().interstitial && ads.interstitialAllowed(sessionTime())) await playAd("interstitial");
   showHub();
 }
 
@@ -150,7 +190,7 @@ function startMatch(c: MatchConfig): void {
     mode: c.league?.mode ?? "regular",
     humanHome: true,
     humanAway: c.twoPlayers,
-    home: home.ratings,
+    home: c.league && boostNext ? boosted(home.ratings) : home.ratings,
     away: away.ratings,
     difficulty: DIFFICULTY_VALUES[settings.difficulty],
     penalties: settings.penalties,
@@ -162,6 +202,7 @@ function startMatch(c: MatchConfig): void {
   hud.show(teams, kits);
   screens.hide();
   document.body.classList.add("in-match");
+  if (c.league) boostNext = false;
   paused = false;
   resultShown = false;
   resultTimer = 0;
@@ -256,6 +297,7 @@ function frame(now: number): void {
     // Menu backdrop: a slow pan over an empty rink.
     view.drawIdle(dt);
   }
+  platform().gameplay(match !== null && !paused && match.phase !== "final");
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

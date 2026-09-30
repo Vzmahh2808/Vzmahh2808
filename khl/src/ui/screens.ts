@@ -39,6 +39,7 @@ export interface Handlers {
   leaguePlay(): void;
   leagueSim(kind: "match" | "days" | "phase" | "season"): void;
   leagueContinue(): void;
+  leagueBoost(): void;
   leagueDiscard(): void;
 }
 
@@ -70,6 +71,8 @@ export class Screens {
   private root: HTMLElement;
   private pick: { kind: Kind; home: number | null } | null = null;
   hasSeason = false;
+  /** Rewarded boost for the next match: not offered, offered, or already earned. */
+  boost: "none" | "available" | "active" = "none";
   private tab: "table" | "games" | "playoffs" = "table";
   private season: Season | null = null;
 
@@ -294,6 +297,12 @@ export class Screens {
     return html;
   }
 
+  private boostButton(): string {
+    if (this.boost === "active") return `<span class="tag" style="align-self:center;margin:0">Состав усилен на следующий матч</span>`;
+    if (this.boost === "available") return `<button class="b sec" data-act="league-boost">Усилить состав (реклама)</button>`;
+    return "";
+  }
+
   hub(season: Season): void {
     this.season = season;
     const me = teamById(season.user);
@@ -312,7 +321,7 @@ export class Screens {
         const home = f.home === season.user;
         const opp = teamById(home ? f.away : f.home);
         card = `<div class="next"><span class="lbl">${home ? "Дома" : "В гостях"}</span><i class="kit" style="--c1:${opp.main};--c2:${opp.accent}"></i><b>${opp.name}</b><small>${opp.city} · ${"★".repeat(Math.max(1, Math.min(5, Math.round((strength(opp) - 64) / 5) + 1)))}</small></div>`;
-        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>`;
+        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>${this.boostButton()}`;
       } else {
         card = `<div class="next"><b>В этот день ваш клуб не играет</b></div>`;
         buttons = `<button class="b sec" data-act="league-sim-match">Следующий день</button>`;
@@ -328,7 +337,7 @@ export class Screens {
         const mineW = s.hi === season.user ? s.hiWins : s.loWins;
         const oppW = s.hi === season.user ? s.loWins : s.hiWins;
         card = `<div class="next"><span class="lbl">Игра ${seriesGameNumber(s)} · ${home ? "дома" : "в гостях"}</span><i class="kit" style="--c1:${opp.main};--c2:${opp.accent}"></i><b>${opp.name}</b><small>Серия ${mineW}–${oppW}, до четырёх побед</small></div>`;
-        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>`;
+        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>${this.boostButton()}`;
       } else {
         card = `<div class="next"><b>${out.kind === "missed" ? "Ваш клуб не попал в плей-офф" : out.kind === "eliminated" ? `Ваш клуб выбыл: ${ROUND_NAMES[out.round!]}` : "Ждём соперников"}</b></div>`;
         buttons = `<button class="b sec" data-act="league-sim-match">Следующий день</button>`;
@@ -418,6 +427,9 @@ export class Screens {
         break;
       case "league-continue":
         this.h.leagueContinue();
+        break;
+      case "league-boost":
+        this.h.leagueBoost();
         break;
       case "random": {
         const p = this.pick;

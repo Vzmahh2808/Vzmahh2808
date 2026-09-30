@@ -6,6 +6,7 @@
  * ratings, calibrated against the real match engine.
  */
 import { Rng } from "../core/rng";
+import { SEASON_KEY, touchSaved } from "./persist";
 import { TEAMS, strength, teamById, type Conference } from "./teams";
 
 export type Decided = "reg" | "ot" | "so";
@@ -358,7 +359,7 @@ export function resultForUser(season: Season, home: number, userGoals: number, o
 
 // ------------------------------------------------------------ persistence
 
-export const LEAGUE_KEY = "khl.league";
+export const LEAGUE_KEY = SEASON_KEY;
 
 export function serializeSeason(s: Season): string {
   return JSON.stringify(s);
@@ -390,6 +391,7 @@ export function saveSeason(s: Season | null): void {
   try {
     if (s) localStorage.setItem(LEAGUE_KEY, serializeSeason(s));
     else localStorage.removeItem(LEAGUE_KEY);
+    touchSaved();
   } catch {
     /* progress will not persist without storage */
   }

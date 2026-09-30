@@ -1,3 +1,5 @@
+import { SETTINGS_KEY as KEY, touchSaved } from "./persist";
+
 /** Player settings kept in local storage. */
 export interface Settings {
   muted: boolean;
@@ -10,7 +12,7 @@ export interface Settings {
   penalties: boolean;
 }
 
-export const SETTINGS_KEY = "khl.settings";
+export const SETTINGS_KEY = KEY;
 export const DIFFICULTY_VALUES = [0.35, 0.6, 0.85];
 export const LENGTH_SECONDS = [90, 150, 240];
 export const DIFFICULTY_NAMES = ["Лёгкий", "Обычный", "Сложный"];
@@ -46,6 +48,7 @@ export function loadSettings(): Settings {
 export function saveSettings(s: Settings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    touchSaved();
   } catch {
     /* storage may be blocked; settings just will not persist */
   }
