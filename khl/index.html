@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="color-scheme" content="dark" />
+    <title>Шайбу!</title>
+    <meta name="description" content="Аркадный хоккей в браузере: чемпионат, плей-офф, буллиты и игра вдвоём." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1b33'/%3E%3Cellipse cx='16' cy='19' rx='9' ry='4' fill='%23111'/%3E%3Cellipse cx='16' cy='16' rx='9' ry='4' fill='%23222'/%3E%3Cpath d='M7 16h18' stroke='%23fff' stroke-width='1.5'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <div id="hud" class="hidden">
+        <div id="scoreboard">
+          <div class="team home"><i class="badge"></i><b class="tname"></b><span class="score">0</span></div>
+          <div class="mid"><span id="period">1-й</span><span id="clock">20:00</span></div>
+          <div class="team away"><span class="score">0</span><b class="tname"></b><i class="badge"></i></div>
+        </div>
+        <div id="shots"></div>
+        <canvas id="minimap" width="240" height="106"></canvas>
+        <div id="banner"></div>
+        <div id="sub"></div>
+        <div id="shootout"></div>
+        <div id="hint"></div>
+        <button id="pausebtn" aria-label="Пауза">❚❚</button>
+        <button id="mutebtn" aria-label="Звук">♪</button>
+      </div>
+
+      <div id="touch">
+        <div class="stick-zone"></div>
+        <div class="stick-base"><div class="stick-knob"></div></div>
+        <div class="tbtns">
+          <button class="tbtn shoot" data-act="shoot">Бросок</button>
+          <button class="tbtn pass" data-act="pass">Пас</button>
+          <button class="tbtn check" data-act="check">Отбор</button>
+          <button class="tbtn sprint" data-act="sprint">Рывок</button>
+        </div>
+        <div class="rotate-hint">Поверните телефон горизонтально</div>
+      </div>
+
+      <div id="screen" class="hidden"></div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
