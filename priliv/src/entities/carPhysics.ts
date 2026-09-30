@@ -46,10 +46,12 @@ export const CAR_SPECS: Record<string, CarSpec> = {
   taxi: { maxSpeed: 44, maxReverse: 10, accel: 9.5, brake: 22, drag: 0.6, steerMax: 0.55, wheelBase: 2.7, grip: 6, handbrakeGrip: 1.2, mass: 1350, length: 4.5, width: 1.9 },
   police: { maxSpeed: 52, maxReverse: 12, accel: 13, brake: 26, drag: 0.55, steerMax: 0.55, wheelBase: 2.7, grip: 6.5, handbrakeGrip: 1.2, mass: 1500, length: 4.6, width: 1.95 },
   pickup: { maxSpeed: 38, maxReverse: 9, accel: 8, brake: 20, drag: 0.7, steerMax: 0.58, wheelBase: 3.0, grip: 5.5, handbrakeGrip: 1.3, mass: 1700, length: 5.0, width: 2.0 },
+  // Motorcycle: quick, nimble and slim, so it slips between cars, but it has nothing to hide behind.
+  bike: { maxSpeed: 54, maxReverse: 6, accel: 16, brake: 28, drag: 0.55, steerMax: 0.42, wheelBase: 2.2, grip: 8, handbrakeGrip: 1.6, mass: 260, length: 2.2, width: 0.8 },
 };
 
 /** Kinds that appear as ordinary traffic and parked cars. */
-export const CIVILIAN_KINDS = ["sedan", "sport", "van", "pickup", "taxi"] as const;
+export const CIVILIAN_KINDS = ["sedan", "sport", "van", "pickup", "taxi", "bike"] as const;
 
 /** Bought upgrades on one car. */
 export interface CarMods {

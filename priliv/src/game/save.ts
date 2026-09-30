@@ -1,5 +1,6 @@
 import { RAID_EVERY, freshHoldings, type Holdings } from "./business";
 import { WEAPONS } from "./weapons";
+import { isOutfit } from "./outfits";
 import { EXPORT_PRICES, type ExportState } from "./sidejobs";
 
 export const SAVE_KEY = "priliv.save";
@@ -34,6 +35,8 @@ export interface SaveData {
   stunts: { done: string[]; best: number };
   /** Guns bought, rounds carried for each, and the one in hand. */
   weapons: { owned: string[]; ammo: Record<string, number>; selected: string | null };
+  /** Outfit worn now and every outfit bought (indexes into OUTFITS). */
+  outfit: { worn: number; owned: number[] };
   /** Gang hideouts cleared for good. */
   hideouts: string[];
   /** The export dock's list of cars to steal; an empty list is drawn fresh in game. */
@@ -66,11 +69,20 @@ export function freshSave(): SaveData {
     business: freshHoldings(),
     stunts: { done: [], best: 0 },
     weapons: { owned: [], ammo: {}, selected: null },
+    outfit: { worn: 0, owned: [0] },
     hideouts: [],
     export: { wanted: [], delivered: [], total: 0 },
     bestDerby: null,
     savedAt: 0,
   };
+}
+
+function parseOutfit(raw: unknown): SaveData["outfit"] {
+  const o = (raw ?? {}) as { worn?: unknown; owned?: unknown };
+  const owned = Array.isArray(o.owned) ? [...new Set(o.owned.filter(isOutfit))] : [];
+  if (!owned.includes(0)) owned.unshift(0);
+  const worn = isOutfit(o.worn) && owned.includes(o.worn) ? o.worn : 0;
+  return { worn, owned };
 }
 
 function parseWeapons(raw: unknown): SaveData["weapons"] {
@@ -166,6 +178,7 @@ export function parseSave(raw: string | null): SaveData | null {
     business: parseHoldings(data.business),
     weapons: parseWeapons(data.weapons),
     export: parseExport(data.export),
+    outfit: parseOutfit(data.outfit),
     bestDerby: typeof data.bestDerby === "number" && data.bestDerby > 0 ? data.bestDerby : null,
     savedAt: typeof data.savedAt === "number" && data.savedAt > 0 ? data.savedAt : 0,
     hideouts: Array.isArray(data.hideouts) ? [...new Set(data.hideouts.filter((h): h is string => typeof h === "string"))] : [],

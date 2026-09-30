@@ -16,6 +16,8 @@ export interface CarVisual {
   sirenRed?: THREE.MeshStandardMaterial;
   sirenBlue?: THREE.MeshStandardMaterial;
   beam: THREE.Mesh;
+  /** Two-wheelers tip into their turns. */
+  lean?: boolean;
 }
 
 const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 12);
@@ -26,7 +28,73 @@ const hubGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.3, 8);
 hubGeo.rotateX(Math.PI / 2);
 const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd0ff, roughness: 0.15, metalness: 0.2, transparent: true, opacity: 0.75 });
 
+const bikeWheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.14, 14);
+bikeWheelGeo.rotateX(Math.PI / 2);
+const bikeHubGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.16, 8);
+bikeHubGeo.rotateX(Math.PI / 2);
+
+/** A motorcycle with a rider: two wheels in line, tank, seat, handlebar. */
+function buildBike(spec: CarSpec, color: number): CarVisual {
+  const g = new THREE.Group();
+  const shell = new THREE.Group();
+  g.add(shell);
+  const L = spec.length;
+  const body = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.3 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.8 });
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material, rz = 0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    mesh.position.set(x, y, z);
+    mesh.rotation.z = rz;
+    mesh.castShadow = true;
+    shell.add(mesh);
+    return mesh;
+  };
+  box(L * 0.55, 0.16, 0.16, 0, 0.62, 0, dark); // frame
+  box(0.62, 0.3, 0.34, L * 0.1, 0.9, 0, body); // tank
+  box(0.75, 0.12, 0.3, -L * 0.12, 0.84, 0, dark); // seat
+  box(0.34, 0.5, 0.12, -L * 0.36, 0.72, 0, body, -0.5); // tail
+  box(0.08, 0.7, 0.08, L * 0.36, 0.72, 0, dark, 0.35); // fork
+  box(0.1, 0.08, 0.7, L * 0.33, 1.08, 0, dark); // handlebar
+  box(0.5, 0.3, 0.3, 0.05, 0.42, 0, dark); // engine
+  // Rider.
+  const jacket = new THREE.MeshStandardMaterial({ color: 0x2d3436, roughness: 0.8 });
+  const helmet = new THREE.MeshStandardMaterial({ color: 0xf5f6fa, roughness: 0.3 });
+  box(0.3, 0.6, 0.38, -L * 0.05, 1.35, 0, jacket, -0.35);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), helmet);
+  head.position.set(L * 0.03, 1.8, 0);
+  shell.add(head);
+  box(0.12, 0.12, 0.62, L * 0.28, 1.15, 0, jacket, 0); // arms on the bar
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4d0, emissiveIntensity: 0.4 });
+  const brakeMat = new THREE.MeshStandardMaterial({ color: 0x660000, emissive: 0xff2020, emissiveIntensity: 0.15 });
+  const hl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 0.2), headMat);
+  hl.position.set(L * 0.42, 0.98, 0);
+  shell.add(hl);
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.24), brakeMat);
+  tl.position.set(-L * 0.47, 0.8, 0);
+  shell.add(tl);
+
+  const wheels: THREE.Mesh[] = [];
+  const frontWheels: THREE.Object3D[] = [];
+  for (const x of [spec.wheelBase / 2, -spec.wheelBase / 2]) {
+    const pivot = new THREE.Object3D();
+    pivot.position.set(x, 0.34, 0);
+    const wheel = new THREE.Mesh(bikeWheelGeo, wheelMat);
+    wheel.castShadow = true;
+    wheel.add(new THREE.Mesh(bikeHubGeo, hubMat));
+    pivot.add(wheel);
+    g.add(pivot);
+    wheels.push(wheel);
+    if (x > 0) frontWheels.push(pivot);
+  }
+  const beam = new THREE.Mesh(beamGeo, beamMaterial);
+  beam.position.set(L / 2 + 6, 0.22, 0);
+  beam.renderOrder = 1;
+  g.add(beam);
+  return { group: g, shell, baseColor: new THREE.Color(color), lift: 0.05, wheels, frontWheels, brake: brakeMat, head: headMat, body, beam, lean: true };
+}
+
 export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarVisual {
+  if (kind === "bike") return buildBike(spec, color);
   const g = new THREE.Group();
   const shell = new THREE.Group();
   g.add(shell);
@@ -211,7 +279,7 @@ export function syncCarVisual(v: CarVisual, c: CarState, braking: boolean, groun
   v.body.metalness = 0.3 * (1 - dmg);
   // Heavy damage sags the shell to one side.
   const sag = Math.max(0, (50 - c.health) / 50);
-  v.shell.rotation.x = sag * 0.05;
+  v.shell.rotation.x = sag * 0.05 + (v.lean ? c.steer * 1.6 : 0);
   v.shell.rotation.z = sag * -0.03;
   v.shell.position.y = c.wrecked ? -0.18 : -sag * 0.08;
 }
