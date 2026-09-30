@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Перевал</title>
+    <meta name="description" content="Игра про спортивный туризм: проведите группу по категорийному маршруту через перевалы и реки, соберите все КП и уложитесь в контрольный срок." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23141826'/%3E%3Cpath d='M4 26 L13 9 L18 17 L21 13 L28 26 Z' fill='%23a09a8e'/%3E%3Cpath d='M13 9 L15.5 13.5 L10.5 13.5 Z' fill='%23fff'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <span class="title">Перевал</span>
+        <span id="daybox" class="daybox"></span>
+        <span id="look" class="look"></span>
+        <div class="topbar-actions">
+          <button id="btn-camp" class="chip" title="Ночёвка (C)">Лагерь</button>
+          <button id="btn-rest" class="chip" title="Днёвка (R)">Днёвка</button>
+          <button id="btn-sound" class="chip" title="Звук (M)">🔊</button>
+          <button id="btn-help" class="chip" title="Помощь (?)">?</button>
+          <button id="btn-menu" class="chip" title="Меню (Esc)">Меню</button>
+        </div>
+      </header>
+
+      <main id="stage">
+        <canvas id="view" aria-label="Карта маршрута"></canvas>
+        <div id="dpad" aria-label="Кнопки движения">
+          <span></span><button data-dir="0,-1">↑</button><span></span>
+          <button data-dir="-1,0">←</button><span class="dot">·</span><button data-dir="1,0">→</button>
+          <span></span><button data-dir="0,1">↓</button><span></span>
+        </div>
+      </main>
+
+      <aside id="sidebar">
+        <section class="team">
+          <h3>Группа</h3>
+          <div id="team"></div>
+        </section>
+        <section class="supplies">
+          <h3>Снаряжение</h3>
+          <dl class="grid">
+            <dt>Еда</dt><dd id="st-food"></dd>
+            <dt>Газ</dt><dd id="st-gas"></dd>
+            <dt>Верёвка</dt><dd id="st-rope"></dd>
+            <dt>Аптечка</dt><dd id="st-kit"></dd>
+            <dt>Вес</dt><dd id="st-load"></dd>
+          </dl>
+        </section>
+        <section class="route">
+          <h3>Маршрут</h3>
+          <div class="bar-row">
+            <span class="bar-label">Дух</span>
+            <div class="bar"><div id="morale-bar" class="bar-fill morale"></div><span id="morale-text" class="bar-text"></span></div>
+          </div>
+          <div id="cps" class="cps"></div>
+        </section>
+      </aside>
+
+      <footer id="log" aria-live="polite"></footer>
+
+      <div id="overlay" class="overlay hidden">
+        <div id="overlay-card" class="card"></div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
