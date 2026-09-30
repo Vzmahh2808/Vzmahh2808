@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BOAT_SPECS, boatImpactDamage, boatSpeed, chaseBoat, hullPoints, keepOnWater, makeBoat, separateBoats, stepBoat } from "../src/entities/boatPhysics";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, REGATTA, WATER_NODES, clearWater, isBoatWater, routeOnWater } from "../src/world/water";
-import { BRIDGE, PIERS, landAt } from "../src/world/island";
+import { BRIDGE, PIERS, RESORT_PIERS, landAt } from "../src/world/island";
 import { regattaMission } from "../src/game/story";
 
 const LIMIT = 278;
@@ -81,12 +81,12 @@ describe("boat handling", () => {
 
 describe("water world", () => {
   it("treats piers as land and keeps moored boats afloat beside them", () => {
-    for (const p of PIERS) expect(landAt((p.x0 + p.x1) / 2, (p.z0 + p.z1) / 2, LIMIT)).toBe("pier");
+    for (const p of [...PIERS, ...RESORT_PIERS]) expect(landAt((p.x0 + p.x1) / 2, (p.z0 + p.z1) / 2, LIMIT)).toBe("pier");
     for (const d of DOCKS) {
       const s = makeBoat(d.x, d.z, d.heading);
       for (const p of hullPoints(s, BOAT_SPECS[d.kind])) expect(water(p.x, p.z)).toBe(true);
       // Close enough to step aboard from a pier.
-      const gap = Math.min(...PIERS.map((p) => Math.hypot(Math.max(p.x0 - d.x, 0, d.x - p.x1), Math.max(p.z0 - d.z, 0, d.z - p.z1))));
+      const gap = Math.min(...[...PIERS, ...RESORT_PIERS].map((p) => Math.hypot(Math.max(p.x0 - d.x, 0, d.x - p.x1), Math.max(p.z0 - d.z, 0, d.z - p.z1))));
       expect(gap).toBeLessThan(4.5);
     }
   });

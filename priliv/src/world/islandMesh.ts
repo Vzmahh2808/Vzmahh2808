@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, LIGHTHOUSE, PIER_TOP, WATER_LEVEL, type IslandLayout, type Rect } from "./island";
+import { BRIDGE, CAPE, CITY_EAST_SHORE, CITY_SOUTH_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, LIGHTHOUSE, PIER_TOP, WATER_LEVEL, type IslandLayout, type Rect } from "./island";
 
-function colored(g: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
+export function colored(g: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   const c = new THREE.Color(color);
   const n = g.attributes.position.count;
   const arr = new Float32Array(n * 3);
@@ -11,13 +11,13 @@ function colored(g: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   return g;
 }
 
-function box(w: number, h: number, d: number, x: number, y: number, z: number, color: number): THREE.BufferGeometry {
+export function box(w: number, h: number, d: number, x: number, y: number, z: number, color: number): THREE.BufferGeometry {
   const g = new THREE.BoxGeometry(w, h, d);
   g.translate(x, y, z);
   return colored(g, color);
 }
 
-function rectBox(r: Rect, y0: number, y1: number, color: number): THREE.BufferGeometry {
+export function rectBox(r: Rect, y0: number, y1: number, color: number): THREE.BufferGeometry {
   return box(r.x1 - r.x0, y1 - y0, r.z1 - r.z0, (r.x0 + r.x1) / 2, (y0 + y1) / 2, (r.z0 + r.z1) / 2, color);
 }
 
@@ -63,8 +63,16 @@ export function buildIslandMeshes(island: IslandLayout, lampHead: THREE.Material
   water.receiveShadow = true;
   group.add(water);
 
+  // The southern sea, between the city and the resort and out past both.
+  const southWater = new THREE.Mesh(new THREE.PlaneGeometry(968, 800), waterMat);
+  southWater.rotation.x = -Math.PI / 2;
+  southWater.position.set(CITY_EAST_SHORE - 484, WATER_LEVEL, CITY_SOUTH_SHORE + 400);
+  southWater.receiveShadow = true;
+  group.add(southWater);
+
   const solid: THREE.BufferGeometry[] = [];
   solid.push(box(10, 0.3, 700, CITY_EAST_SHORE - 3, -0.1, 0, 0xd8c690));
+  solid.push(box(560, 0.3, 10, CITY_EAST_SHORE - 280, -0.1, CITY_SOUTH_SHORE - 3, 0xd8c690));
 
   // Island ground, roads and markings.
   solid.push(rectBox(ISLAND, -1.5, ISLAND_TOP - 0.01, 0x676c73));

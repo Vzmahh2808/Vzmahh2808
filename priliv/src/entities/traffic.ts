@@ -18,6 +18,8 @@ export interface TrafficCar {
   /** Current segment: from intersection (ax, az) to (bx, bz) in grid indices. */
   a: { ix: number; iz: number };
   b: { ix: number; iz: number };
+  /** Set for cars on a fixed circuit (the resort has no street grid): the waypoints and the one being chased. */
+  loop?: { points: Array<{ x: number; z: number }>; i: number };
   /** Idle timer after a crash. */
   stunned: number;
   input: CarInput;
@@ -80,11 +82,87 @@ export function spawnTraffic(rng: Rng, layout: CityLayout, count: number, colors
   return cars;
 }
 
+/** A car on a closed circuit, placed a fraction `t` (0..1) of the way round it. */
+export function spawnLoopCar(rng: Rng, points: Array<{ x: number; z: number }>, t: number, kinds: string[], colors: number[]): TrafficCar {
+  // Find the leg containing the fraction of total length.
+  const lens = points.map((p, i) => Math.hypot(points[(i + 1) % points.length].x - p.x, points[(i + 1) % points.length].z - p.z));
+  const total = lens.reduce((a, b) => a + b, 0);
+  let d = (((t % 1) + 1) % 1) * total;
+  let leg = 0;
+  while (d > lens[leg]) d -= lens[leg++];
+  const a = points[leg];
+  const b = points[(leg + 1) % points.length];
+  const f = d / (lens[leg] || 1);
+  const state = makeCar(a.x + (b.x - a.x) * f, a.z + (b.z - a.z) * f, Math.atan2(b.z - a.z, b.x - a.x));
+  state.vx = Math.cos(state.heading) * 6;
+  state.vz = Math.sin(state.heading) * 6;
+  return {
+    state,
+    kind: rng.pick(kinds),
+    color: rng.pick(colors),
+    a: { ix: 0, iz: 0 },
+    b: { ix: 0, iz: 0 },
+    loop: { points, i: (leg + 1) % points.length },
+    stunned: 0,
+    input: { throttle: 0, steer: 0, brake: false, handbrake: false },
+  };
+}
+
+/** How far ahead the nearest obstacle in the car's corridor is (Infinity when clear). */
+function obstacleAhead(s: CarState, obstacles: Obstacle[]): number {
+  const fx = Math.cos(s.heading);
+  const fz = Math.sin(s.heading);
+  let nearest = Infinity;
+  for (const o of obstacles) {
+    const dx = o.x - s.x;
+    const dz = o.z - s.z;
+    const ahead = dx * fx + dz * fz;
+    const side = Math.abs(-dx * fz + dz * fx);
+    if (ahead > 0 && ahead < 16 && side < o.r + 1.4) nearest = Math.min(nearest, ahead - o.r);
+  }
+  return nearest;
+}
+
+const LOOP_CRUISE = 11;
+
+/** Steer a car round its circuit, slowing for corners and for anything in the way. */
+function driveLoop(car: TrafficCar, obstacles: Obstacle[], dt: number): void {
+  const s = car.state;
+  const inp = car.input;
+  const loop = car.loop!;
+  if (car.stunned > 0) {
+    car.stunned -= dt;
+    inp.throttle = 0;
+    inp.brake = true;
+    return;
+  }
+  let target = loop.points[loop.i];
+  if (Math.hypot(target.x - s.x, target.z - s.z) < 7) {
+    loop.i = (loop.i + 1) % loop.points.length;
+    target = loop.points[loop.i];
+  }
+  let diff = Math.atan2(target.z - s.z, target.x - s.x) - s.heading;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  inp.steer = Math.max(-1, Math.min(1, diff * 2.2));
+  const nearest = obstacleAhead(s, obstacles);
+  let speed = Math.abs(diff) > 0.4 || Math.hypot(target.x - s.x, target.z - s.z) < 14 ? TURN_SPEED : LOOP_CRUISE;
+  if (nearest < 12) speed = Math.min(speed, Math.max(0, (nearest - 3) * 1.2));
+  const v = forwardSpeed(s);
+  inp.brake = v > speed + 1.5 || (speed < 1 && v > 0.2);
+  inp.throttle = v < speed - 0.5 ? 0.8 : 0;
+  inp.handbrake = false;
+}
+
 /** Decide throttle/steer for one AI car. `obstacles` are everything it should not hit. */
 /** Distance before the intersection centre where the car's nose should stop at a red. */
 const STOP_LINE = ROAD_WIDTH / 2 + 2;
 
 export function driveTraffic(car: TrafficCar, layout: CityLayout, rng: Rng, obstacles: Obstacle[], dt: number, time?: number, halfLength = 2.2): void {
+  if (car.loop) {
+    driveLoop(car, obstacles, dt);
+    return;
+  }
   const s = car.state;
   const inp = car.input;
   if (car.stunned > 0) {
@@ -116,16 +194,7 @@ export function driveTraffic(car: TrafficCar, layout: CityLayout, rng: Rng, obst
   inp.steer = Math.max(-1, Math.min(1, diff * 2.2));
 
   // Obstacle check in a corridor ahead.
-  const fx = Math.cos(s.heading);
-  const fz = Math.sin(s.heading);
-  let nearest = Infinity;
-  for (const o of obstacles) {
-    const dx = o.x - s.x;
-    const dz = o.z - s.z;
-    const ahead = dx * fx + dz * fz;
-    const side = Math.abs(-dx * fz + dz * fx);
-    if (ahead > 0 && ahead < 16 && side < o.r + 1.4) nearest = Math.min(nearest, ahead - o.r);
-  }
+  const nearest = obstacleAhead(s, obstacles);
   const distToNode = Math.hypot(nt.x - s.x, nt.z - s.z);
   const turning = Math.abs(diff) > 0.35 || distToNode < 10;
   let target = turning ? TURN_SPEED : CRUISE;

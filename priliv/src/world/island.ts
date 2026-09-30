@@ -19,7 +19,28 @@ export const WATER_LEVEL = 0.02;
 /** City shoreline on the east side: land stops a little past the outer road. */
 export const CITY_EAST_SHORE = 268;
 
+/** City shoreline on the south side, facing the resort across the strait. */
+export const CITY_SOUTH_SHORE = 268;
+
 export const BRIDGE: Rect = { x0: 240, x1: 402, z0: -7, z1: 7 };
+/** Second bridge, from the city's southern promenade to the resort. */
+export const SOUTH_BRIDGE: Rect = { x0: -7, x1: 7, z0: 262, z1: 424 };
+/** «Лазурный берег»: the resort island south of the city. */
+export const RESORT: Rect = { x0: -180, x1: 180, z0: 420, z1: 696 };
+/** Road centre lines on the resort (12 m wide, the boulevard 14 m). */
+export const RESORT_ROADS: Rect[] = [
+  { x0: -7, x1: 7, z0: 420, z1: 656 }, // boulevard from the bridge
+  { x0: -168, x1: 168, z0: 484, z1: 496 }, // street A
+  { x0: -168, x1: 168, z0: 574, z1: 586 }, // street B
+  { x0: -168, x1: 168, z0: 644, z1: 656 }, // seafront drive
+  { x0: -174, x1: -162, z0: 430, z1: 656 }, // west ring
+  { x0: 162, x1: 174, z0: 430, z1: 656 }, // east ring
+];
+/** Marina piers reaching south into the sea from the resort promenade. */
+export const RESORT_PIERS: Rect[] = [
+  { x0: -122, x1: -110, z0: 696, z1: 736 },
+  { x0: 96, x1: 108, z0: 696, z1: 736 },
+];
 export const ISLAND: Rect = { x0: 400, x1: 640, z0: -120, z1: 120 };
 export const CAPE: Rect = { x0: 638, x1: 672, z0: -16, z1: 16 };
 
@@ -53,10 +74,10 @@ export type Land = "city" | "bridge" | "island" | "pier" | "water";
 
 /** What is under (x, z). The city is solid ground except past its east shore. */
 export function landAt(x: number, z: number, cityLimit: number): Land {
-  if (inRect(BRIDGE, x, z)) return "bridge";
-  if (PIERS.some((p) => inRect(p, x, z))) return "pier";
-  if (inRect(ISLAND, x, z) || inRect(CAPE, x, z)) return "island";
-  if (Math.abs(z) <= cityLimit && x >= -cityLimit && x <= CITY_EAST_SHORE) return "city";
+  if (inRect(BRIDGE, x, z) || inRect(SOUTH_BRIDGE, x, z)) return "bridge";
+  if (PIERS.some((p) => inRect(p, x, z)) || RESORT_PIERS.some((p) => inRect(p, x, z))) return "pier";
+  if (inRect(ISLAND, x, z) || inRect(CAPE, x, z) || inRect(RESORT, x, z)) return "island";
+  if (z >= -cityLimit && z <= Math.min(cityLimit, CITY_SOUTH_SHORE) && x >= -cityLimit && x <= CITY_EAST_SHORE) return "city";
   return "water";
 }
 
@@ -66,7 +87,7 @@ export function onIslandRoad(x: number, z: number): boolean {
 
 /** Keep things inside the playable world (the far edges are hard walls, the rest is water). */
 export function clampWorld(x: number, z: number, cityLimit: number): { x: number; z: number } {
-  return { x: Math.max(-cityLimit, Math.min(ISLAND.x1 + 60, x)), z: Math.max(-cityLimit, Math.min(cityLimit, z)) };
+  return { x: Math.max(-cityLimit, Math.min(ISLAND.x1 + 60, x)), z: Math.max(-cityLimit, Math.min(RESORT.z1 + 70, z)) };
 }
 
 export interface IslandLayout {
