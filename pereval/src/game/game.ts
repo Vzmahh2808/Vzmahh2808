@@ -12,6 +12,7 @@ import {
   type Point,
   type RiverMethod,
   type Role,
+  type Setup,
   type StageChallenge,
   type Tile,
   type Weather,
@@ -19,6 +20,7 @@ import {
 import { generateWorld, samePoint, tileAt } from "./world";
 
 export const MEMBER_COUNT = 4;
+export const ROSTER_SIZE = 6;
 const ALL_ROLES: Role[] = ["leader", "quartermaster", "medic", "mechanic"];
 
 /** Stage outcome thresholds on the 0..1 quality scale. */
@@ -38,23 +40,54 @@ export class Game {
     this.rng.setState(state.rngState);
   }
 
-  static newGame(seed: number, category: Category): Game {
+  /**
+   * Candidates for the group: six people with every role covered at least once.
+   * Uses its own random stream so the roster does not disturb map generation.
+   */
+  static roster(seed: number, category: Category): Member[] {
+    const rng = new Rng((seed ^ 0x9e3779b9) >>> 0);
+    const names = rng.shuffle([...NAMES]).slice(0, ROSTER_SIZE);
+    const roles = rng.shuffle([...ALL_ROLES]);
+    while (roles.length < ROSTER_SIZE) roles.push(rng.pick(ALL_ROLES));
+    rng.shuffle(roles);
+    return names.map((n, i) => {
+      let technique = rng.int(1, 5);
+      let strength = rng.int(1, 5);
+      // Nobody is useless: weak walkers are skilled and vice versa.
+      if (technique + strength < 5) technique = 5 - strength;
+      if (technique + strength > 8 && category === 1) strength = Math.max(1, 8 - technique);
+      return { id: i + 1, name: n.name, female: n.female, role: roles[i], technique, strength, health: 100, stamina: 100, injury: 0 };
+    });
+  }
+
+  /** Allowed ranges for the pre-trip supplies. */
+  static setupLimits(category: Category): { food: [number, number]; gas: [number, number]; kit: [number, number] } {
+    const days = CATEGORIES[category].days;
+    return { food: [5, days + 3], gas: [3, days + 2], kit: [0, 4] };
+  }
+
+  static defaultSetup(category: Category, roster: Member[]): Setup {
+    const def = CATEGORIES[category];
+    return { memberIds: roster.slice(0, MEMBER_COUNT).map((m) => m.id), foodPerMember: def.foodPerMember, gas: def.gas, kit: def.kit, rope: true };
+  }
+
+  /** Group load in kilograms for a given team size and supplies. */
+  static loadOf(memberCount: number, supplies: { food: number; gas: number; rope: boolean }): number {
+    return Math.round(memberCount * 14 + supplies.food * 0.7 + supplies.gas * 0.25 + (supplies.rope ? 3 : 0));
+  }
+
+  static newGame(seed: number, category: Category, setup?: Setup): Game {
     const rng = new Rng(seed);
     const def = CATEGORIES[category];
     const world = generateWorld(rng, category);
-    const names = rng.shuffle([...NAMES]).slice(0, MEMBER_COUNT);
-    const roles = rng.shuffle([...ALL_ROLES]);
-    const members: Member[] = names.map((n, i) => ({
-      id: i + 1,
-      name: n.name,
-      female: n.female,
-      role: roles[i],
-      technique: rng.int(2, 5),
-      strength: rng.int(2, 5),
-      health: 100,
-      stamina: 100,
-      injury: 0,
-    }));
+    const roster = Game.roster(seed, category);
+    const chosen = setup ?? Game.defaultSetup(category, roster);
+    const ids = [...new Set(chosen.memberIds)].filter((id) => roster.some((m) => m.id === id)).slice(0, MEMBER_COUNT);
+    if (ids.length !== MEMBER_COUNT) throw new Error(`setup must pick ${MEMBER_COUNT} distinct members from the roster`);
+    const members: Member[] = ids.map((id) => ({ ...roster.find((m) => m.id === id)! }));
+    const limits = Game.setupLimits(category);
+    const clamp = (v: number, [lo, hi]: [number, number]) => Math.max(lo, Math.min(hi, Math.round(v)));
+    const foodPerMember = clamp(chosen.foodPerMember, limits.food);
     const weather: Weather = rng.chance(0.7) ? "clear" : "cloudy";
     const state: GameState = {
       version: SAVE_VERSION,
@@ -74,9 +107,11 @@ export class Game {
       weather,
       forecast: weather,
       members,
-      supplies: { food: def.foodPerMember * MEMBER_COUNT, gas: def.gas, rope: true, kit: def.kit },
+      supplies: { food: foodPerMember * MEMBER_COUNT, gas: clamp(chosen.gas, limits.gas), rope: chosen.rope, kit: clamp(chosen.kit, limits.kit) },
       morale: 75,
       pending: null,
+      pendingChoice: null,
+      choiceDay: 0,
       status: "playing",
       endReason: "",
       stats: { tiles: 0, stages: 0, falls: 0, peaks: 0, restDays: 0 },
@@ -126,8 +161,7 @@ export class Game {
 
   /** Total group load in kilograms. */
   loadKg(): number {
-    const s = this.state.supplies;
-    return Math.round(this.state.members.length * 14 + s.food * 0.7 + s.gas * 0.25 + (s.rope ? 3 : 0));
+    return Game.loadOf(this.state.members.length, this.state.supplies);
   }
 
   averageStamina(): number {
@@ -194,7 +228,7 @@ export class Game {
   /** Step one tile. Returns true when the state changed (moved or a stage began). */
   move(dx: number, dy: number): boolean {
     const s = this.state;
-    if (s.status !== "playing" || s.pending) return false;
+    if (s.status !== "playing" || s.pending || s.pendingChoice) return false;
     const to = { x: s.pos.x + dx, y: s.pos.y + dy };
     const reason = this.blockReason(to);
     if (reason) {
@@ -297,6 +331,69 @@ export class Game {
       }
     }
     this.checkEvacuation();
+    if (s.status === "playing" && s.choiceDay !== s.day && s.hours >= 1 && this.rng.chance(0.3)) this.offerChoice();
+  }
+
+  // ---------------------------------------------------------------- trail dilemmas
+
+  /** Picks an applicable dilemma for the current tile; used by tests with an explicit id. */
+  offerChoice(id?: string): boolean {
+    const s = this.state;
+    if (s.pendingChoice || s.status !== "playing") return false;
+    const here = this.tile(s.pos)!.t;
+    const pool = Object.entries(CHOICES).filter(([key, def]) => (id ? key === id : def.when(this, here)));
+    if (pool.length === 0) return false;
+    const [key, def] = id ? pool[0] : this.rng.weighted(pool, ([, d]) => d.weight);
+    const options = def.options.filter((o) => !o.when || o.when(this));
+    const member = this.rng.pick(s.members);
+    s.pendingChoice = {
+      id: key,
+      title: def.title,
+      text: def.text(this, member),
+      options: options.map((o) => ({ label: o.label, hint: o.hint(this) })),
+    };
+    // Remember who the dilemma is about, so the effect hits the same person.
+    this.choiceMember = member.id;
+    s.choiceDay = s.day;
+    this.events.push({ type: "choice" });
+    this.log(`${def.title}. Решайте.`, "system");
+    this.syncRng();
+    return true;
+  }
+
+  /** Resolve the pending dilemma with the chosen option index. */
+  choose(index: number): boolean {
+    const s = this.state;
+    const c = s.pendingChoice;
+    if (!c || s.status !== "playing") return false;
+    const def = CHOICES[c.id];
+    const options = def.options.filter((o) => !o.when || o.when(this));
+    const opt = options[index];
+    if (!opt) return false;
+    const member = s.members.find((m) => m.id === this.choiceMember) ?? s.members[0];
+    s.pendingChoice = null;
+    opt.apply(this, member);
+    this.checkEvacuation();
+    this.syncRng();
+    return true;
+  }
+
+  private choiceMember = 0;
+
+  /** Random helpers for the dilemma registry. */
+  roll(p: number): boolean {
+    return this.rng.chance(p);
+  }
+  spendHours(h: number): void {
+    this.state.hours = round1(Math.max(0, this.state.hours - h));
+  }
+  giveHours(h: number): void {
+    this.state.hours = round1(Math.min(DAY_HOURS, this.state.hours + h));
+  }
+  hurt(m: Member, health: number, stamina = 0): void {
+    m.health = Math.max(0, m.health - health);
+    m.stamina = Math.max(0, m.stamina - stamina);
+    if (health > 0) this.events.push({ type: "hurt", memberId: m.id });
   }
 
   // ---------------------------------------------------------------- stages
@@ -422,7 +519,7 @@ export class Game {
   /** End the day. `rest` turns it into a full rest day (днёвка) with better recovery. */
   camp(rest = false): boolean {
     const s = this.state;
-    if (s.status !== "playing" || s.pending) return false;
+    if (s.status !== "playing" || s.pending || s.pendingChoice) return false;
     if (rest && s.hours < DAY_HOURS - EPS) {
       this.log("Днёвку объявляют с утра, пока никто не выходил.", "warn");
       return false;
@@ -613,7 +710,7 @@ export class Game {
 
   useKit(memberId: number): boolean {
     const s = this.state;
-    if (s.status !== "playing" || s.pending || s.supplies.kit <= 0) return false;
+    if (s.status !== "playing" || s.pending || s.pendingChoice || s.supplies.kit <= 0) return false;
     const m = s.members.find((x) => x.id === memberId);
     if (!m) return false;
     if (m.health >= 100 && m.injury === 0) {
@@ -633,6 +730,7 @@ export class Game {
   abandon(): boolean {
     if (this.state.status !== "playing") return false;
     this.state.pending = null;
+    this.state.pendingChoice = null;
     this.finish("lost", "Группа сошла с маршрута");
     return true;
   }
@@ -655,11 +753,128 @@ export class Game {
     s.status = status;
     s.endReason = reason;
     s.pending = null;
+    s.pendingChoice = null;
     this.events.push({ type: status });
     if (status === "won") this.log(`Финиш! ${reason} за ${s.day} дн.`, "good");
     else this.log(`Маршрут окончен: ${reason}.`, "bad");
   }
 }
+
+interface ChoiceDef {
+  title: string;
+  weight: number;
+  when: (g: Game, terrain: Tile["t"]) => boolean;
+  text: (g: Game, m: Member) => string;
+  options: { label: string; hint: (g: Game) => string; when?: (g: Game) => boolean; apply: (g: Game, m: Member) => void }[];
+}
+
+const LAND = new Set<Tile["t"]>(["meadow", "forest", "swamp", "scree", "glacier"]);
+const bad = (g: Game) => g.state.weather === "storm" || g.state.weather === "snow";
+const all = (g: Game, f: (m: Member) => void) => g.state.members.forEach(f);
+
+/** Trail dilemmas. Text and hints are computed at offer time; effects run on choose(). */
+export const CHOICES: Record<string, ChoiceDef> = {
+  lostTourist: {
+    title: "Заблудившийся турист",
+    weight: 2,
+    when: (_g, t) => LAND.has(t),
+    text: () => "На тропе одинокий турист без карты: отстал от своей группы и второй день ищет дорогу к людям. Просит вывести его на тропу к посёлку.",
+    options: [
+      { label: "Проводить до тропы", hint: () => "−2 ч, мораль +10", apply: (g) => { g.spendHours(2); g.addMorale(10); g.log("Вывели его на тропу и показали дорогу. Приятно быть полезными: мораль +10.", "good"); } },
+      { label: "Объяснить дорогу и идти дальше", hint: () => "мораль −5", apply: (g) => { g.addMorale(-5); g.log("Нарисовали схему на бумажке и пошли дальше. Совесть слегка ноет: мораль −5.", "warn"); } },
+    ],
+  },
+  berries: {
+    title: "Ягодная поляна",
+    weight: 3,
+    when: (g, t) => (t === "forest" || t === "meadow") && !bad(g),
+    text: () => "Склон синий от черники — можно за час набрать на пару ужинов.",
+    options: [
+      { label: "Собирать час", hint: () => "−1 ч, еда +3", apply: (g) => { g.spendHours(1); g.state.supplies.food = Math.round((g.state.supplies.food + 3) * 10) / 10; g.log("Набрали черники: еда +3 человеко-дня.", "good"); } },
+      { label: "Идти дальше", hint: () => "ничего не теряем", apply: (g) => g.log("Съели по горсти на ходу и пошли дальше.", "info") },
+    ],
+  },
+  bearTracks: {
+    title: "Свежие следы медведя",
+    weight: 2,
+    when: (_g, t) => t === "forest",
+    text: () => "На тропе свежие медвежьи следы и помёт. Зверь где-то рядом, идёт в нашу сторону.",
+    options: [
+      { label: "Обойти по склону", hint: () => "−1½ ч", apply: (g) => { g.spendHours(1.5); g.log("Сделали крюк по склону, шумели и пели. Медведя не видели.", "info"); } },
+      { label: "Идти по тропе", hint: () => "риск встречи", apply: (g) => { if (g.roll(0.4)) { g.addMorale(-15); all(g, (m) => (m.stamina = Math.max(0, m.stamina - 10))); g.log("Медведь вышел на тропу в двадцати метрах! Стояли, кричали, он ушёл. Мораль −15, силы −10.", "bad"); } else { g.addMorale(3); g.log("Следы ушли в сторону. Обошлось: мораль +3.", "good"); } } },
+    ],
+  },
+  shortcut: {
+    title: "Короткий путь по кулуару",
+    weight: 2,
+    when: (g, t) => (t === "scree" || t === "glacier") && !bad(g),
+    text: () => "Кулуар выводит напрямую вверх и срезает часа полтора, но камни там живые.",
+    options: [
+      { label: "Рискнуть", hint: () => "60 %: +1½ ч, иначе травма", apply: (g, m) => { if (g.roll(0.6)) { g.giveHours(1.5); g.log("Кулуар прошли быстро и чисто: +1½ ч к дню.", "good"); } else { g.hurt(m, 12, 15); g.state.stats.falls++; g.log(`${m.name} ${m.female ? "поехала" : "поехал"} по осыпи вместе с камнями. Здоровье −12.`, "bad"); } } },
+      { label: "Идти по тропе", hint: () => "надёжно", apply: (g) => g.log("Пошли по маркированной тропе.", "info") },
+    ],
+  },
+  stormComing: {
+    title: "С перевала тянет грозу",
+    weight: 3,
+    when: (g, t) => LAND.has(t) && (g.state.weather === "cloudy" || g.state.weather === "rain"),
+    text: () => "Небо на западе чернеет, вдалеке ворчит гром. Можно переждать под скалой или идти.",
+    options: [
+      { label: "Переждать", hint: () => "−2 ч", apply: (g) => { g.spendHours(2); g.log("Два часа под скалой с чаем из термоса. Гроза прошла стороной.", "info"); } },
+      { label: "Идти дальше", hint: () => "50 %: здоровье −5 у всех", apply: (g) => { if (g.roll(0.5)) { all(g, (m) => (m.health = Math.max(0, m.health - 5))); g.addMorale(-5); g.log("Гроза накрыла на открытом склоне. Промокли и продрогли: здоровье −5, мораль −5.", "bad"); } else g.log("Успели проскочить до дождя.", "good"); } },
+    ],
+  },
+  sickStomach: {
+    title: "Кому-то нехорошо",
+    weight: 2,
+    when: (_g, t) => LAND.has(t),
+    text: (_g, m) => `${m.name} с утра ${m.female ? "бледная" : "бледный"}: болит живот, слабость. Похоже, вода из ручья была так себе.`,
+    options: [
+      { label: "Дать лекарство из аптечки", hint: () => "аптечка −1", when: (g) => g.state.supplies.kit > 0, apply: (g, m) => { g.state.supplies.kit--; g.log(`Таблетки помогли, ${m.name} идёт дальше. Аптечка −1.`, "info"); } },
+      { label: "Перетерпеть", hint: () => "силы −30, здоровье −5", apply: (g, m) => { g.hurt(m, 5, 30); g.log(`${m.name} ${m.female ? "шла" : "шёл"} через силу весь день. Силы −30, здоровье −5.`, "warn"); } },
+    ],
+  },
+  oldCabin: {
+    title: "Старая изба",
+    weight: 2,
+    when: (_g, t) => t === "forest",
+    text: () => "У тропы охотничья изба: печка, нары, запас дров. Можно передохнуть в тепле.",
+    options: [
+      { label: "Передохнуть час", hint: () => "−1 ч, силы +10, мораль +5", apply: (g) => { g.spendHours(1); all(g, (m) => (m.stamina = Math.min(100, m.stamina + 10))); g.addMorale(5); g.log("Час у печки. Силы +10, мораль +5.", "good"); } },
+      { label: "Идти дальше", hint: () => "", apply: (g) => g.log("Оставили в избе спички и пошли.", "info") },
+    ],
+  },
+  cairnNote: {
+    title: "Записка в туре",
+    weight: 2,
+    when: (_g, t) => t === "scree" || t === "glacier",
+    text: () => "В каменном туре — записка группы, прошедшей здесь неделю назад. Традиция велит забрать её и оставить свою.",
+    options: [
+      { label: "Написать свою", hint: () => "−½ ч, мораль +6", apply: (g) => { g.spendHours(0.5); g.addMorale(6); g.log("Оставили записку и сфотографировались у тура. Мораль +6.", "good"); } },
+      { label: "Не тратить время", hint: () => "", apply: (g) => g.log("Прочитали чужую записку и положили обратно.", "info") },
+    ],
+  },
+  photoStop: {
+    title: "Вид на весь хребет",
+    weight: 2,
+    when: (g, t) => (t === "glacier" || t === "scree") && g.state.weather === "clear",
+    text: () => "Облака разошлись, и открылся весь хребет до горизонта. Такое бывает раз в поход.",
+    options: [
+      { label: "Фотосессия", hint: () => "−½ ч, мораль +8", apply: (g) => { g.spendHours(0.5); g.addMorale(8); g.log("Полчаса фотографий и молчания. Мораль +8.", "good"); } },
+      { label: "Идём, времени нет", hint: () => "", apply: (g) => g.log("Полюбовались на ходу.", "info") },
+    ],
+  },
+  brokenStrap: {
+    title: "Порвалась лямка",
+    weight: 2,
+    when: (_g, t) => LAND.has(t),
+    text: (_g, m) => `У ${m.name} лопнула лямка рюкзака. Нести на одном плече — не вариант.`,
+    options: [
+      { label: "Реммастер зашьёт", hint: () => "−½ ч", when: (g) => g.hasRole("mechanic"), apply: (g) => { g.spendHours(0.5); g.log("Реммастер зашил лямку за полчаса.", "info") } },
+      { label: "Чинить своими силами", hint: () => "−1½ ч, силы −10", apply: (g, m) => { g.spendHours(1.5); m.stamina = Math.max(0, m.stamina - 10); g.log(`Полтора часа возни с иголкой и стропой. ${m.name} ${m.female ? "устала" : "устал"}: силы −10.`, "warn"); } },
+    ],
+  },
+};
 
 export function fmtHours(h: number): string {
   const whole = Math.floor(h + EPS);

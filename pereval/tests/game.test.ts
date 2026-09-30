@@ -344,3 +344,109 @@ describe("helpers", () => {
     for (const t of Object.keys(TERRAIN) as Terrain[]) expect(TERRAIN[t].name.length).toBeGreaterThan(0);
   });
 });
+
+describe("pre-trip setup", () => {
+  it("offers six candidates covering every role, deterministically", () => {
+    const a = Game.roster(3, 2);
+    const b = Game.roster(3, 2);
+    expect(a).toEqual(b);
+    expect(a).toHaveLength(6);
+    expect(new Set(a.map((m) => m.role)).size).toBe(4);
+    expect(new Set(a.map((m) => m.id)).size).toBe(6);
+    for (const m of a) expect(m.technique + m.strength).toBeGreaterThanOrEqual(5);
+  });
+
+  it("uses the chosen members and clamps supplies to the limits", () => {
+    const roster = Game.roster(9, 1);
+    const ids = [roster[5].id, roster[1].id, roster[4].id, roster[0].id];
+    const g = Game.newGame(9, 1, { memberIds: ids, foodPerMember: 99, gas: 1, kit: 2, rope: false });
+    expect(g.state.members.map((m) => m.id)).toEqual(ids);
+    const limits = Game.setupLimits(1);
+    expect(g.state.supplies.food).toBe(limits.food[1] * 4);
+    expect(g.state.supplies.gas).toBe(limits.gas[0]);
+    expect(g.state.supplies.kit).toBe(2);
+    expect(g.state.supplies.rope).toBe(false);
+    expect(g.loadKg()).toBe(Game.loadOf(4, g.state.supplies));
+  });
+
+  it("rejects a team that is not four distinct candidates", () => {
+    expect(() => Game.newGame(9, 1, { memberIds: [1, 1, 2, 3], foodPerMember: 8, gas: 8, kit: 1, rope: true })).toThrow();
+    expect(() => Game.newGame(9, 1, { memberIds: [1, 2, 3, 42], foodPerMember: 8, gas: 8, kit: 1, rope: true })).toThrow();
+  });
+
+  it("the roster does not change the map", () => {
+    const a = Game.newGame(21, 2);
+    const roster = Game.roster(21, 2);
+    const b = Game.newGame(21, 2, { ...Game.defaultSetup(2, roster), memberIds: roster.slice(2, 6).map((m) => m.id) });
+    expect(a.state.tiles).toEqual(b.state.tiles);
+    expect(a.state.checkpoints).toEqual(b.state.checkpoints);
+  });
+});
+
+describe("trail dilemmas", () => {
+  it("block movement until answered and apply the chosen effect", () => {
+    const g = fresh();
+    plant(g, "meadow");
+    expect(g.offerChoice("lostTourist")).toBe(true);
+    expect(g.state.pendingChoice?.id).toBe("lostTourist");
+    expect(g.state.pendingChoice?.options).toHaveLength(2);
+    expect(g.move(1, 0)).toBe(false);
+    expect(g.camp()).toBe(false);
+    const morale = g.state.morale;
+    expect(g.choose(0)).toBe(true);
+    expect(g.state.pendingChoice).toBeNull();
+    expect(g.state.hours).toBe(DAY_HOURS - 2);
+    expect(g.state.morale).toBe(morale + 10);
+    expect(g.move(1, 0)).toBe(true);
+  });
+
+  it("hides options that need a kit or a mechanic when the group has none", () => {
+    const g = fresh();
+    g.state.supplies.kit = 0;
+    g.offerChoice("sickStomach");
+    expect(g.state.pendingChoice?.options).toHaveLength(1);
+    g.choose(0);
+    expect(g.state.members.some((m) => m.stamina <= 70)).toBe(true);
+    const g2 = fresh();
+    g2.state.supplies.kit = 1;
+    g2.offerChoice("sickStomach");
+    expect(g2.state.pendingChoice?.options).toHaveLength(2);
+    g2.choose(0);
+    expect(g2.state.supplies.kit).toBe(0);
+  });
+
+  it("fires at most once a day and only on matching terrain", () => {
+    const g = fresh();
+    plant(g, "forest");
+    g.state.pos = { x: 11, y: 10 };
+    expect(g.offerChoice("bearTracks")).toBe(true);
+    expect(g.offerChoice("berries")).toBe(false);
+    g.choose(1);
+    expect(g.offerChoice("berries")).toBe(true);
+    g.choose(1);
+    let fired = 0;
+    for (let seed = 1; seed <= 30; seed++) {
+      const h = Game.newGame(seed, 1);
+      let n = 0;
+      for (let i = 0; i < 12 && h.state.status === "playing"; i++) {
+        if (h.state.pendingChoice) {
+          n++;
+          h.choose(h.state.pendingChoice.options.length - 1);
+        } else if (h.state.pending) h.resolveStage([1, 1, 1, 1]);
+        else if (!h.move(1, 0) && !h.move(0, 1) && !h.move(0, -1)) h.camp();
+      }
+      expect(n).toBeLessThanOrEqual(2);
+      fired += n;
+    }
+    expect(fired).toBeGreaterThan(0);
+  });
+
+  it("survives a save round-trip while pending", () => {
+    const g = fresh();
+    g.offerChoice("berries");
+    const copy = Game.fromState(JSON.parse(JSON.stringify(g.snapshot())));
+    const food = copy.state.supplies.food;
+    expect(copy.choose(0)).toBe(true);
+    expect(copy.state.supplies.food).toBe(food + 3);
+  });
+});

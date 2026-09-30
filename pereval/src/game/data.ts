@@ -163,7 +163,7 @@ export const CATEGORIES: Record<Category, CategoryDef> = {
     short: "III к. с.",
     width: 38,
     height: 24,
-    days: 16,
+    days: 18,
     checkpoints: 5,
     rockShare: 0.22,
     rivers: 4,

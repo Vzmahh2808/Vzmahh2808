@@ -1,4 +1,4 @@
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 /** Hours of walking available each day. */
 export const DAY_HOURS = 10;
@@ -87,6 +87,28 @@ export interface StageChallenge {
   sequence: number;
 }
 
+/** What the player decided before leaving the village. */
+export interface Setup {
+  memberIds: number[];
+  foodPerMember: number;
+  gas: number;
+  kit: number;
+  rope: boolean;
+}
+
+export interface ChoiceOption {
+  label: string;
+  hint: string;
+}
+
+/** A dilemma on the trail; the engine keeps only serializable text, effects live in a registry. */
+export interface Choice {
+  id: string;
+  title: string;
+  text: string;
+  options: ChoiceOption[];
+}
+
 export type LogKind = "info" | "good" | "bad" | "warn" | "system";
 
 export interface LogEntry {
@@ -127,6 +149,9 @@ export interface GameState {
   /** 0..100 group morale. */
   morale: number;
   pending: StageChallenge | null;
+  pendingChoice: Choice | null;
+  /** Day on which the last trail dilemma fired, so there is at most one per day. */
+  choiceDay: number;
   status: Status;
   endReason: string;
   stats: Stats;
@@ -138,6 +163,7 @@ export interface GameState {
 export type GameEvent =
   | { type: "move"; from: Point; to: Point }
   | { type: "stage"; kind: StageKind }
+  | { type: "choice" }
   | { type: "stageResult"; ok: boolean }
   | { type: "checkpoint"; id: number }
   | { type: "camp"; rest: boolean }

@@ -23,6 +23,8 @@ interface Result {
 /** Greedy nearest-checkpoint bot; the same brain is reused by the UI's "autoplay" test helper. */
 export function botStep(g: Game): boolean {
   const s = g.state;
+  // The bot is cautious: it takes the last option, which is usually "keep walking".
+  if (s.pendingChoice) return g.choose(s.pendingChoice.options.length - 1);
   if (s.pending) {
     if (s.pending.kind === "river" && s.pending.methods.includes("rope") && s.weather !== "clear") g.chooseMethod("rope");
     return g.resolveStage(s.members.map((m) => g.autoQuality(m)));
@@ -51,7 +53,9 @@ export function botStep(g: Game): boolean {
 }
 
 function playOne(seed: number, category: Category): Result {
-  const g = Game.newGame(seed, category);
+  // Pick the four strongest candidates, like a careful leader would.
+  const roster = Game.roster(seed, category).sort((a, b) => b.technique + b.strength - (a.technique + a.strength));
+  const g = Game.newGame(seed, category, { ...Game.defaultSetup(category, roster), memberIds: roster.slice(0, 4).map((m) => m.id) });
   let guard = 0;
   while (g.state.status === "playing" && guard++ < 2000) {
     botStep(g);

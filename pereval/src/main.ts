@@ -1,13 +1,13 @@
 import { CATEGORIES, ROLES, TERRAIN, WEATHER } from "./game/data";
-import { Game, fmtHours, QUALITY_OK, QUALITY_SLIP } from "./game/game";
+import { Game, MEMBER_COUNT, fmtHours, QUALITY_OK, QUALITY_SLIP } from "./game/game";
 import { randomSeed } from "./game/rng";
 import { clearSave, loadGame, loadScores, recordScore, saveGame, type ScoreEntry } from "./game/save";
 import { rankFor, scoreBreakdown } from "./game/score";
-import type { Category, Point, RiverMethod } from "./game/types";
+import type { Category, Point, RiverMethod, Setup } from "./game/types";
 import { Renderer, pointEq } from "./ui/renderer";
 import { Sound } from "./ui/sound";
 
-type Mode = "title" | "play" | "stage" | "menu" | "help" | "scores" | "over";
+type Mode = "title" | "setup" | "play" | "stage" | "choice" | "menu" | "help" | "scores" | "over";
 
 const $ = <T extends HTMLElement>(sel: string): T => {
   const el = document.querySelector<T>(sel);
@@ -133,7 +133,7 @@ function flushEvents(): void {
 
 /** Run a player action; persist and refresh when it changed the state. */
 function act(action: () => boolean): void {
-  if (!game || (mode !== "play" && mode !== "stage")) return;
+  if (!game || (mode !== "play" && mode !== "stage" && mode !== "choice")) return;
   const changed = action();
   flushEvents();
   if (changed) {
@@ -143,6 +143,9 @@ function act(action: () => boolean): void {
     } else if (game.state.pending && mode === "play") {
       stopTravel();
       openStage();
+    } else if (game.state.pendingChoice && mode === "play") {
+      stopTravel();
+      openChoice();
     }
   }
   updateHud();
@@ -170,8 +173,8 @@ function finishGame(): void {
   setTimeout(() => showGameOver(entry, place), 900);
 }
 
-function startNewGame(category: Category): void {
-  game = Game.newGame(randomSeed(), category);
+function startNewGame(category: Category, seed: number, setup: Setup): void {
+  game = Game.newGame(seed, category, setup);
   scoreRecorded = false;
   renderer.reset();
   saveGame(game.snapshot());
@@ -201,6 +204,7 @@ function enterPlay(): void {
   updateHud();
   requestDraw();
   if (game?.state.pending) openStage();
+  else if (game?.state.pendingChoice) openChoice();
 }
 
 // ---------------------------------------------------------------- travel by click
@@ -268,7 +272,7 @@ function showTitle(): void {
   card.querySelectorAll<HTMLButtonElement>("button[data-cat]").forEach((b) =>
     b.addEventListener("click", () => {
       sound.unlock();
-      startNewGame(Number(b.dataset.cat) as Category);
+      showSetup(Number(b.dataset.cat) as Category);
     }),
   );
   bindAct("continue", () => {
@@ -281,6 +285,99 @@ function showTitle(): void {
 
 function bindAct(name: string, fn: () => void): void {
   card.querySelector<HTMLButtonElement>(`button[data-act="${name}"]`)?.addEventListener("click", fn);
+}
+
+/** Pre-trip planning: pick four of six candidates and pack the group's supplies. */
+function showSetup(category: Category): void {
+  mode = "setup";
+  const seed = randomSeed();
+  const roster = Game.roster(seed, category);
+  const limits = Game.setupLimits(category);
+  const def = CATEGORIES[category];
+  const setup: Setup = Game.defaultSetup(category, roster);
+  setup.memberIds = [];
+  const dots = (n: number) => "●".repeat(n) + "○".repeat(5 - n);
+
+  const render = () => {
+    const picked = setup.memberIds.length;
+    const supplies = { food: setup.foodPerMember * MEMBER_COUNT, gas: setup.gas, rope: setup.rope };
+    const kg = Game.loadOf(MEMBER_COUNT, supplies);
+    const factor = 1 + Math.max(0, (kg - 70) / 120);
+    const cards = roster
+      .map((m) => {
+        const sel = setup.memberIds.includes(m.id);
+        return `<button class="cand ${sel ? "sel" : ""}" data-id="${m.id}" title="${ROLES[m.role].hint}">
+          <div class="head"><span class="name">${m.name}</span><span class="role">${ROLES[m.role].name}</span></div>
+          <div class="skills">техника ${dots(m.technique)}<br>сила ${dots(m.strength)}</div>
+        </button>`;
+      })
+      .join("");
+    const stepper = (key: "foodPerMember" | "gas" | "kit", label: string, unit: string, [lo, hi]: [number, number]) =>
+      `<div class="stepper"><span>${label}</span><button data-step="${key}:-1" ${setup[key] <= lo ? "disabled" : ""}>−</button><b>${setup[key]}</b><small>${unit}</small><button data-step="${key}:1" ${setup[key] >= hi ? "disabled" : ""}>+</button></div>`;
+    const roles = new Set(roster.filter((m) => setup.memberIds.includes(m.id)).map((m) => m.role));
+    const missing = (Object.keys(ROLES) as (keyof typeof ROLES)[]).filter((r) => !roles.has(r)).map((r) => ROLES[r].name);
+    showOverlay(
+      `
+      <h2>${def.name}: сборы</h2>
+      <p class="sub">${def.checkpoints} КП, контрольный срок ${def.days} дн. Выберите четверых и соберите рюкзаки: лишний вес замедляет, нехватка еды бьёт по здоровью.</p>
+      <h3>Кандидаты (${picked} из ${MEMBER_COUNT})</h3>
+      <div class="roster">${cards}</div>
+      <p class="hint">${picked === MEMBER_COUNT ? (missing.length ? `Без роли: ${missing.join(", ")}.` : "Все роли закрыты.") : "Роли дают бонусы: завхоз экономит еду, медик лечит сильнее, реммастер бережёт снаряжение, руководитель держит мораль."}</p>
+      <h3>Снаряжение</h3>
+      ${stepper("foodPerMember", "Еда на человека", "дн.", limits.food)}
+      ${stepper("gas", "Газ", "дн.", limits.gas)}
+      ${stepper("kit", "Аптечка", "шт.", limits.kit)}
+      <div class="stepper"><span>Верёвка</span><button data-act="rope" class="${setup.rope ? "on" : ""}">${setup.rope ? "берём (3 кг)" : "не берём"}</button></div>
+      <p class="hint">Вес группы: <b>${kg} кг</b>, ход ×${factor.toFixed(2)} к времени. Еды на ${setup.foodPerMember} дн. из ${def.days}.</p>
+      <div class="menu">
+        <button data-act="go" ${picked === MEMBER_COUNT ? "" : "disabled"}>В путь</button>
+        <button data-act="back">Назад</button>
+      </div>`,
+      "setup-card",
+    );
+    card.querySelectorAll<HTMLButtonElement>("button.cand").forEach((b) =>
+      b.addEventListener("click", () => {
+        const id = Number(b.dataset.id);
+        const i = setup.memberIds.indexOf(id);
+        if (i >= 0) setup.memberIds.splice(i, 1);
+        else if (setup.memberIds.length < MEMBER_COUNT) setup.memberIds.push(id);
+        render();
+      }),
+    );
+    card.querySelectorAll<HTMLButtonElement>("button[data-step]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const [key, d] = b.dataset.step!.split(":") as ["foodPerMember" | "gas" | "kit", string];
+        setup[key] += Number(d);
+        render();
+      }),
+    );
+    bindAct("rope", () => {
+      setup.rope = !setup.rope;
+      render();
+    });
+    bindAct("go", () => startNewGame(category, seed, setup));
+    bindAct("back", showTitle);
+  };
+  render();
+}
+
+function openChoice(): void {
+  if (!game || !game.state.pendingChoice) return;
+  mode = "choice";
+  stopTravel();
+  const c = game.state.pendingChoice;
+  showOverlay(
+    `
+    <h2>${c.title}</h2>
+    <p>${c.text}</p>
+    <div class="menu">${c.options.map((o, i) => `<button data-opt="${i}">${o.label}${o.hint ? ` <span class="hint">${o.hint}</span>` : ""}</button>`).join("")}</div>`,
+  );
+  card.querySelectorAll<HTMLButtonElement>("button[data-opt]").forEach((b) =>
+    b.addEventListener("click", () => {
+      act(() => game!.choose(Number(b.dataset.opt)));
+      if (mode === "choice" && game?.state.status === "playing") enterPlay();
+    }),
+  );
 }
 
 function showMenu(): void {
@@ -327,6 +424,7 @@ function showHelp(back: () => void): void {
     <h2>Как играть</h2>
     <p>У группы 10 ходовых часов в день. Каждая клетка стоит часов по типу местности; дождь, тяжёлые рюкзаки, усталость и травмы замедляют. Когда часы кончились — ставьте лагерь: группа ест, спит и восстанавливает силы. Днёвка (целый день отдыха) лечит лучше, но стоит дня.</p>
     <p>Реки переходят вброд или по навесной переправе (нужна верёвка, дольше, но безопаснее). Мостик — бесплатно. Перевалы берут по перилам. На каждом препятствии — короткая мини-игра; промах стоит сил, падение — здоровья.</p>
+    <p>Перед выходом выберите четверых из шести кандидатов и соберите рюкзаки: еда и газ весят, а тяжёлая группа идёт медленнее. В пути случаются дилеммы: помочь заблудившемуся, срезать по кулуару, переждать грозу. Каждая — выбор между временем, силами и моралью.</p>
     <p>Отметьтесь на всех КП и дойдите до финишного посёлка до контрольного срока. Вершины необязательны, но дают очки и мораль. Если у кого-то здоровье упадёт до нуля, группу эвакуируют.</p>
     <h3>Управление</h3>
     <div class="keys">
