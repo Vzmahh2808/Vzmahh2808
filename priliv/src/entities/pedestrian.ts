@@ -3,6 +3,7 @@ import * as THREE from "three";
 export interface PedVisual {
   group: THREE.Group;
   body: THREE.Group;
+  torso: THREE.Mesh;
   legL: THREE.Mesh;
   legR: THREE.Mesh;
   armL: THREE.Mesh;
@@ -44,14 +45,14 @@ export function buildPedestrian(shirt: number, pants: number, skin = 0xe7b58d, h
     body.add(m);
     return m;
   };
-  add(torsoGeo, shirt, 0, 1.15);
+  const torso = add(torsoGeo, shirt, 0, 1.15);
   add(headGeo, skin, 0, 1.62);
   add(hairGeo, hair, 0, 1.78);
   const legL = add(legGeo, pants, -0.11, 0.85);
   const legR = add(legGeo, pants, 0.11, 0.85);
   const armL = add(armGeo, shirt, -0.3, 1.42);
   const armR = add(armGeo, shirt, 0.3, 1.42);
-  return { group: g, body, legL, legR, armL, armR, phase: Math.random() * 6 };
+  return { group: g, body, torso, legL, legR, armL, armR, phase: Math.random() * 6 };
 }
 
 export function animatePedestrian(p: PedVisual, speed: number, dt: number, fall = 0): void {
@@ -65,4 +66,13 @@ export function animatePedestrian(p: PedVisual, speed: number, dt: number, fall 
   p.body.position.y = Math.abs(Math.sin(p.phase)) * amp * 0.06 + fall * 0.15;
   // Falling tips the whole body backwards around the feet.
   p.body.rotation.x = -fall * Math.PI * 0.48;
+}
+
+/** Change the clothes on an existing figure. */
+export function recolorPedestrian(p: PedVisual, shirt: number, pants: number): void {
+  p.torso.material = mat(shirt);
+  p.armL.material = mat(shirt);
+  p.armR.material = mat(shirt);
+  p.legL.material = mat(pants);
+  p.legR.material = mat(pants);
 }

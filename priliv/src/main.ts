@@ -9,7 +9,8 @@ import { buildWalkGraph } from "./world/sidewalks";
 import { CAR_SPECS, CIVILIAN_KINDS, NO_MODS, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
 import { beamMaterial, buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
-import { animatePedestrian, buildPedestrian, HAIR, PANTS, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
+import { animatePedestrian, buildPedestrian, HAIR, PANTS, recolorPedestrian, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
+import { OUTFITS, tryChange } from "./game/outfits";
 import { knockPed, rejoinNetwork, scare, spawnPeds, stepPed, type Ped, type Threat } from "./entities/peds";
 import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
 import { ParticleSystem } from "./fx/particles";
@@ -760,6 +761,11 @@ function recyclePeds(budget: number, minD = PED_NEAR): void {
 // ---------------------------------------------------------------- player
 
 const playerVis = buildPedestrian(0x2e86de, 0x2d3436);
+function wearOutfit(i: number): void {
+  const o = OUTFITS[i] ?? OUTFITS[0];
+  recolorPedestrian(playerVis, o.shirt, o.pants);
+}
+wearOutfit(save.outfit.worn);
 scene.add(playerVis.group);
 /** The gun in the player's right hand, along the arm so it points ahead when the arm is raised. */
 const gunMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.3, 0.12), new THREE.MeshStandardMaterial({ color: 0x1d1f24, roughness: 0.5, metalness: 0.6 }));
@@ -1908,6 +1914,47 @@ function openGunShop(): void {
   openMenu("Оружейная лавка «Калибр»", items);
 }
 
+// ---------------------------------------------------------------- clothes shop
+
+const clothesMarker = new ZoneMarker(scene, 0xfd79a8, "Н", 4, "Одежда");
+clothesMarker.show(PLACES.clothes.x, PLACES.clothes.z);
+
+function openClothes(): void {
+  const seen = wanted.level > 0 && policeCanSee(player.x, player.z);
+  const items: MenuItem[] = OUTFITS.map((o, i) => {
+    const has = save.outfit.owned.includes(i);
+    const worn = save.outfit.worn === i;
+    return {
+      label: o.name,
+      note: worn ? "на вас" : has ? "куплено, переодеться бесплатно" : "новый образ",
+      price: has || worn ? undefined : o.price,
+      owned: worn,
+      action: () => {
+        const r = tryChange(save.outfit.worn, i, save.money, wanted.level, seen, save.outfit.owned);
+        if (!r.ok) {
+          if (r.reason === "seen") showBanner("Полиция у входа: переодеться не получится");
+          return;
+        }
+        if (!has) {
+          addMoney(-o.price);
+          save.outfit.owned.push(i);
+        }
+        save.outfit.worn = i;
+        wearOutfit(i);
+        if (r.disguised) {
+          wanted.clear();
+          standDown();
+        }
+        persist();
+        closeMenu();
+        audio.coin();
+        showBanner(r.disguised ? "Вас не узнали: полиция потеряла след" : `Новый образ: ${o.name}`);
+      },
+    };
+  });
+  openMenu(seen ? "Магазин «Лоск» (снаружи полиция)" : wanted.level > 0 ? "Магазин «Лоск»: переоденьтесь, и вас не узнают" : "Магазин «Лоск»", items);
+}
+
 // ---------------------------------------------------------------- missions, garage, paint shop
 
 const STORY = storyMissions(layout.n);
@@ -1938,7 +1985,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, export: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, clothes: false, export: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -2244,6 +2291,7 @@ function updateMissions(dt: number): void {
   if (!runner.active && entered("shop", PLACES.shop.x, PLACES.shop.z, 5, !v || speedOf(v.state) < 3)) openShop();
   // Ammo is for sale mid-mission too.
   if (entered("gunShop", PLACES.gunShop.x, PLACES.gunShop.z, 4, !v && !player.boat)) openGunShop();
+  if (entered("clothes", PLACES.clothes.x, PLACES.clothes.z, 4, !v && !player.boat)) openClothes();
   if (!runner.active && v && entered("depot", PLACES.depot.x, PLACES.depot.z, 6, speedOf(v.state) < 4)) {
     startMission(makeCourierRun(rng, roadPoints, PLACES.depot));
   }
@@ -2495,7 +2543,7 @@ function syncMissionVisuals(dt: number): void {
   }
   syncBusinessMarkers(dt);
   syncHideoutMarkers(dt);
-  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, exportMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, clothesMarker, exportMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- businesses
@@ -3681,6 +3729,7 @@ function nearbyPlaceHint(): string | null {
     { ...PLACES.paint, text: "«Мастерская»: заедьте на машине — ремонт, покраска и тюнинг" },
     { ...PLACES.shop, text: "«Автосалон»: подойдите или подъедьте, чтобы купить машину" },
     { ...PLACES.gunShop, text: "«Оружейная»: подойдите пешком, чтобы купить оружие и патроны" },
+    { ...PLACES.clothes, text: "«Лоск»: одежда. Если вас не видит полиция, новый образ снимает розыск" },
     { ...EXPORT_AT, text: `«Экспорт машин»: заедьте на угнанной машине из списка, вам заплатят. Ищут: ${exportWanted()}` },
   ];
   if (!runner.active) {
@@ -3832,6 +3881,7 @@ function updateHud(): void {
     { ...PLACES.paint, color: "#48dbfb", label: "П", name: "Мастерская" },
     { ...PLACES.shop, color: "#c56cf0", label: "А", name: "Автосалон" },
     { ...PLACES.gunShop, color: "#e17055", label: "О", name: "Оружейная" },
+    { ...PLACES.clothes, color: "#fd79a8", label: "Н", name: "Одежда" },
     { ...EXPORT_AT, color: "#00b894", label: "Э", name: "Экспорт машин" },
   ];
   if (!runner.active) {
@@ -3963,6 +4013,7 @@ if (location.search.includes("debug")) {
     land,
     openShop,
     openGunShop,
+    openClothes,
     guns,
     weapon: () => weaponId,
     giveGun: (id: string, rounds = 60) => {
@@ -3985,6 +4036,7 @@ if (location.search.includes("debug")) {
     lastKnown,
     holeVisible: () => holeMesh.visible,
     spawnPursuer,
+    spawnCar: (kind: string, x: number, z: number, heading = 0) => addVehicle(makeCar(x, z, heading), kind, 0xe17055, null),
     lamps: layout.lamps,
     ads,
     lowQuality: () => lowQuality,

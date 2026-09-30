@@ -92,6 +92,7 @@ export const SHOP: ShopCar[] = [
   { kind: "taxi", name: "Такси «Бриз»", price: 900, color: 0xf6c90e },
   { kind: "van", name: "Фургон «Трюм»", price: 1000, color: 0xf5f6fa },
   { kind: "pickup", name: "Пикап «Мол»", price: 1200, color: 0xc0392b },
+  { kind: "bike", name: "Мотоцикл «Оса»", price: 1500, color: 0xe17055 },
   { kind: "sport", name: "Спорткар «Шторм»", price: 3500, color: 0x8e44ad },
 ];
 
