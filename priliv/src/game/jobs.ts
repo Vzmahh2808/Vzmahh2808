@@ -55,6 +55,37 @@ export function makeTaxiFare(rng: Rng, curbside: Point[], from: Point): TaxiFare
   };
 }
 
+/** Ambulance pay: flat call-out plus distance, with more for a fast run. */
+export function medicPay(distance: number, timeLeft: number, timeTotal: number, streak: number): number {
+  const base = 70 + distance * 0.9;
+  const speedBonus = timeTotal > 0 ? Math.max(0, timeLeft / timeTotal) * 0.6 : 0;
+  return Math.round(base * (1 + speedBonus) * (1 + Math.min(streak, 5) * 0.1));
+}
+
+/** One emergency call: reach the injured person fast, then rush them to the hospital. */
+export function makeMedicCall(rng: Rng, curbside: Point[], from: Point, hospital: Point): TaxiFare {
+  const pickup = pickPoint(rng, curbside, from, 70, 240);
+  const distance = Math.hypot(hospital.x - pickup.x, hospital.z - pickup.z);
+  // Tighter than a taxi fare: a life is at stake.
+  const time = Math.round((fareTime(Math.hypot(pickup.x - from.x, pickup.z - from.z)) + fareTime(distance)) * 0.85);
+  return {
+    pickup,
+    dropoff: hospital,
+    distance,
+    mission: {
+      id: "medic",
+      title: "Скорая",
+      brief: "",
+      reward: 0,
+      time,
+      steps: [
+        { kind: "goto", at: pickup, radius: 9, vehicle: "any", stop: true, text: "Вызов: пострадавший у обочины. Остановитесь рядом" },
+        { kind: "goto", at: hospital, radius: 10, vehicle: "any", stop: true, text: "Быстро в больницу («+» на карте)" },
+      ],
+    },
+  };
+}
+
 /** Courier run: three drops in a row against the clock. */
 export function makeCourierRun(rng: Rng, points: Point[], depot: Point): Mission {
   const drops: Point[] = [];
@@ -88,11 +119,14 @@ export interface ShopCar {
 }
 
 export const SHOP: ShopCar[] = [
+  { kind: "hatch", name: "Хэтчбек «Юла»", price: 600, color: 0x55efc4 },
   { kind: "sedan", name: "Седан «Волна»", price: 800, color: 0x2e86de },
   { kind: "taxi", name: "Такси «Бриз»", price: 900, color: 0xf6c90e },
   { kind: "van", name: "Фургон «Трюм»", price: 1000, color: 0xf5f6fa },
   { kind: "pickup", name: "Пикап «Мол»", price: 1200, color: 0xc0392b },
   { kind: "bike", name: "Мотоцикл «Оса»", price: 1500, color: 0xe17055 },
+  { kind: "suv", name: "Внедорожник «Тундра»", price: 2200, color: 0x2d3436 },
+  { kind: "muscle", name: "Маслкар «Гроза»", price: 2800, color: 0xd63031 },
   { kind: "sport", name: "Спорткар «Шторм»", price: 3500, color: 0x8e44ad },
 ];
 

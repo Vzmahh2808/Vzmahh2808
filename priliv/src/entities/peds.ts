@@ -1,7 +1,7 @@
 import type { Rng } from "../core/rng";
 import { nearestNode, type WalkGraph } from "../world/sidewalks";
 
-export type PedState = "walk" | "flee" | "down" | "gone" | "wait";
+export type PedState = "walk" | "flee" | "down" | "gone" | "wait" | "fight";
 
 export interface Ped {
   id: number;
@@ -22,6 +22,10 @@ export interface Ped {
   fall: number;
   walkSpeed: number;
   look: number;
+  /** Bold people answer a beating with fists instead of running. */
+  brave: boolean;
+  /** Seconds until this ped can throw its next punch (and drives the arm swing). */
+  swing: number;
 }
 
 export interface Threat {
@@ -31,6 +35,12 @@ export interface Threat {
 }
 
 export const FLEE_SPEED = 5.8;
+/** Share of the crowd that hits back. */
+export const BRAVE_SHARE = 0.4;
+export const FIGHT_SPEED = 3.6;
+export const FIGHT_REACH = 1.25;
+export const FIGHT_DAMAGE = 7;
+export const FIGHT_PAUSE = 1.1;
 export const DOWN_TIME = 8;
 const GRAVITY = 18;
 
@@ -59,6 +69,8 @@ export function spawnPeds(rng: Rng, g: WalkGraph, count: number): Ped[] {
       fall: 0,
       walkSpeed: 1.1 + rng.next() * 0.6,
       look: rng.int(0, 1_000_000),
+      brave: rng.chance(BRAVE_SHARE),
+      swing: 0,
     });
   }
   return peds;
@@ -89,9 +101,53 @@ export function knockPed(p: Ped, vx: number, vz: number): void {
   p.heading = Math.atan2(-vz, -vx);
 }
 
-export function scare(p: Ped, from: { x: number; z: number }, seconds = 4): void {
-  // Waiting fares hold their ground; only a hit knocks them over.
+/** A ped who has had enough turns on whoever hit them, and fights until one of them is down. */
+export function enrage(p: Ped): void {
   if (p.state === "down" || p.state === "gone" || p.state === "wait") return;
+  p.state = "fight";
+  p.swing = 0.5;
+}
+
+/** A fighter loses interest only when the target gets clean away. */
+export const FIGHT_GIVE_UP = 70;
+
+/**
+ * One tick of a fighter chasing (tx, tz). Returns "hit" when a punch lands
+ * and "quit" only when the target has got clean away: a fight ends with a
+ * winner, so there is no timeout and no backing down.
+ */
+export function stepFight(p: Ped, tx: number, tz: number, dt: number, collide?: (x: number, z: number) => { x: number; z: number } | null): "hit" | "quit" | null {
+  p.swing = Math.max(0, p.swing - dt);
+  const dx = tx - p.x;
+  const dz = tz - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d > FIGHT_GIVE_UP) return "quit";
+  turnToward(p, Math.atan2(dz, dx), 10, dt);
+  let result: "hit" | null = null;
+  if (d > FIGHT_REACH) {
+    p.speed += (FIGHT_SPEED - p.speed) * Math.min(1, dt * 6);
+    p.x += Math.cos(p.heading) * p.speed * dt;
+    p.z += Math.sin(p.heading) * p.speed * dt;
+    if (collide) {
+      const push = collide(p.x, p.z);
+      if (push) {
+        p.x += push.x;
+        p.z += push.z;
+      }
+    }
+  } else {
+    p.speed *= Math.max(0, 1 - dt * 10);
+    if (p.swing <= 0) {
+      p.swing = FIGHT_PAUSE;
+      result = "hit";
+    }
+  }
+  return result;
+}
+
+export function scare(p: Ped, from: { x: number; z: number }, seconds = 4): void {
+  // Waiting fares hold their ground; only a hit knocks them over. A fighter is not frightened by noise.
+  if (p.state === "down" || p.state === "gone" || p.state === "wait" || p.state === "fight") return;
   p.state = "flee";
   p.timer = Math.max(p.timer, seconds);
   p.heading = Math.atan2(p.z - from.z, p.x - from.x);
@@ -111,6 +167,12 @@ export function stepPed(
   if (p.state === "gone") return;
   if (p.state === "wait") {
     p.speed = 0;
+    p.fall = Math.max(0, p.fall - dt * 2);
+    return;
+  }
+
+  // A fighter is driven by stepFight from the game loop.
+  if (p.state === "fight") {
     p.fall = Math.max(0, p.fall - dt * 2);
     return;
   }

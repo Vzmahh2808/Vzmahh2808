@@ -29,6 +29,10 @@ export interface Places {
   gunShop: Point;
   /** Clothes shop «Лоск». */
   clothes: Point;
+  /** Hospital: heals on foot; the ambulance job ends here. */
+  hospital: Point;
+  /** Where the ambulance waits. */
+  ambulanceLot: { x: number; z: number; heading: number };
   /** Where cars bought at the shop are delivered. */
   shopLot: { x: number; z: number; heading: number };
   garageSlots: Array<{ x: number; z: number; heading: number }>;
@@ -47,6 +51,8 @@ export function places(n: number): Places {
     office: road(n, 1, 2, mid, 0),
     gunShop: road(n, 2, 6, 0, mid),
     clothes: road(n, n / 2 + 2, 3, 0, mid),
+    hospital: road(n, 1, n / 2 + 1, mid, 0),
+    ambulanceLot: { ...road(n, 1, n / 2 + 1, mid + 14, 3.6), heading: 0 },
     shopLot: { ...road(n, n / 2 + 1, n / 2, 3.6, mid + 12), heading: Math.PI / 2 },
     garageSlots: [-16, -9, 9].map((dx) => ({ x: garage.x + dx, z: garage.z + 3.6, heading: 0 })),
   };

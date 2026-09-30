@@ -1,4 +1,5 @@
 import type { Rng } from "../core/rng";
+import { SIGNAL_OFFSET } from "./signals";
 
 /**
  * Pure city layout: a grid of blocks separated by roads. Units are metres, y is up,
@@ -170,10 +171,15 @@ export function generateCity(rng: Rng, n = 8): CityLayout {
   }
 
   const posts: Post[] = [...lamps.map((l) => ({ x: l.x, z: l.z, r: LAMP_RADIUS })), ...trees.map((t) => ({ x: t.x, z: t.z, r: TRUNK_RADIUS * t.scale }))];
+  // Traffic light poles on the four corners of every intersection.
+  for (const it of intersections) {
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) posts.push({ x: it.x + sx * SIGNAL_OFFSET, z: it.z + sz * SIGNAL_OFFSET, r: SIGNAL_RADIUS });
+  }
   return { n, half, buildings, trees, lamps, posts, intersections, parking };
 }
 
 export const LAMP_RADIUS = 0.3;
+export const SIGNAL_RADIUS = 0.2;
 export const TRUNK_RADIUS = 0.4;
 
 const POST_CELL = 16;
