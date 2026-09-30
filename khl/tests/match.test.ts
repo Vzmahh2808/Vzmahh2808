@@ -100,7 +100,7 @@ describe("match flow", () => {
     m.clock = 0.01;
     m.phase = "play";
     m.tick(1 / 60);
-    if (m.phase !== "final") {
+    if ((m.phase as string) !== "final") {
       expect(m.phase).toBe("shootout");
       expect(m.so).not.toBeNull();
     }

@@ -1,6 +1,20 @@
 /** Full-screen menus: title, team pick, help, settings, pause and result. */
 import { DIFFICULTY_NAMES, LENGTH_NAMES, type Settings } from "../game/settings";
-import { CONFERENCE_NAMES, DIVISION_NAMES, LEAGUE_NAME, TEAMS, strength, type Team } from "../game/teams";
+import {
+  ROUND_NAMES,
+  SEASON_LENGTHS,
+  compareRows,
+  conferenceTable,
+  currentSeries,
+  seriesGameNumber,
+  seriesHome,
+  standings,
+  userFixture,
+  userOutcome,
+  type Season,
+  type Series,
+} from "../game/league";
+import { CONFERENCE_NAMES, CUP_NAME, DIVISION_NAMES, LEAGUE_NAME, TEAMS, strength, teamById, type Team } from "../game/teams";
 import type { Match } from "../sim/match";
 import { periodLabel } from "./hud";
 
@@ -9,6 +23,8 @@ export interface MatchConfig {
   away: number;
   twoPlayers: boolean;
   shootoutOnly: boolean;
+  /** Set for championship games: the result is recorded in the season. */
+  league?: { mode: "regular" | "playoff"; userIsHome: boolean };
 }
 
 export interface Handlers {
@@ -17,9 +33,16 @@ export interface Handlers {
   restart(): void;
   toMenu(): void;
   settings(s: Settings): void;
+  /** Championship. */
+  leagueOpen(): void;
+  leagueNew(user: number, games: 21 | 42 | 63): void;
+  leaguePlay(): void;
+  leagueSim(kind: "match" | "days" | "phase" | "season"): void;
+  leagueContinue(): void;
+  leagueDiscard(): void;
 }
 
-type Kind = "quick" | "two" | "shootout";
+type Kind = "quick" | "two" | "shootout" | "league";
 
 const stars = (t: Team): string => {
   const n = Math.max(1, Math.min(5, Math.round((strength(t) - 64) / 5) + 1));
@@ -46,6 +69,9 @@ function teamGrid(): string {
 export class Screens {
   private root: HTMLElement;
   private pick: { kind: Kind; home: number | null } | null = null;
+  hasSeason = false;
+  private tab: "table" | "games" | "playoffs" = "table";
+  private season: Season | null = null;
 
   constructor(
     private h: Handlers,
@@ -74,7 +100,8 @@ export class Screens {
       <h1 class="logo">Шайбу<span>!</span></h1>
       <p class="tag">Аркадный хоккей: ${LEAGUE_NAME}, 22 клуба, овертайм три на три и буллиты. Играйте против компьютера или вдвоём на одной клавиатуре.</p>
       <div class="btns col">
-        <button class="b wide" data-act="quick">Быстрый матч <small>против компьютера</small></button>
+        <button class="b wide" data-act="league">Чемпионат <small>${this.hasSeason ? "продолжить сезон" : "сезон и плей-офф"}</small></button>
+        <button class="b wide sec" data-act="quick">Быстрый матч <small>против компьютера</small></button>
         <button class="b wide sec" data-act="two">Вдвоём <small>одна клавиатура</small></button>
         <button class="b wide sec" data-act="shootout">Серия буллитов <small>тренировка</small></button>
         <button class="b wide sec" data-act="help">Как играть</button>
@@ -86,7 +113,9 @@ export class Screens {
   chooseTeam(kind: Kind, step: 1 | 2): void {
     const two = kind === "two";
     const title =
-      step === 1
+      kind === "league"
+        ? "Выберите клуб для сезона"
+        : step === 1
         ? two
           ? "Первый игрок: выберите клуб"
           : "Выберите ваш клуб"
@@ -147,7 +176,7 @@ export class Screens {
     </div>`);
   }
 
-  result(m: Match, teams: [Team, Team], nameOf: (id: number) => string): void {
+  result(m: Match, teams: [Team, Team], nameOf: (id: number) => string, league = false): void {
     const by = m.decidedBy === "ot" ? "ОТ" : m.decidedBy === "so" ? "Б" : "";
     const winnerName = m.winner === null ? "" : teams[m.winner].name;
     const rows = m.goals
@@ -170,9 +199,156 @@ export class Screens {
         <tr><td>${m.stats.hits[0]}</td><td>Силовые приёмы</td><td>${m.stats.hits[1]}</td></tr>
       </table>
       ${rows ? `<h3>Голы</h3><ul class="goals">${rows}</ul>` : ""}
-      <div class="btns"><button class="b" data-act="again">Ещё раз</button><button class="b sec" data-act="exit">В меню</button></div>
+      <div class="btns">${league ? `<button class="b" data-act="league-continue">Продолжить чемпионат</button>` : `<button class="b" data-act="again">Ещё раз</button><button class="b sec" data-act="exit">В меню</button>`}</div>
     </div>`);
     void periodLabel;
+  }
+
+
+  // ------------------------------------------------------------ championship
+
+  leagueMenu(): void {
+    this.pick = null;
+    this.set(`<div class="panel narrow">
+      <h2>Чемпионат</h2>
+      <p class="tag">${LEAGUE_NAME}: 22 клуба, регулярный сезон по кругу и плей-офф на 16 команд до четырёх побед. Разыграйте ${CUP_NAME}.</p>
+      <div class="btns col">
+        ${this.hasSeason ? `<button class="b wide" data-act="league-open">Продолжить сезон</button>` : ""}
+        <button class="b wide ${this.hasSeason ? "sec" : ""}" data-act="league-new">Новый сезон</button>
+        <button class="b wide sec" data-act="menu">Назад</button>
+      </div>
+      ${this.hasSeason ? `<p class="tag" style="margin-top:12px;font-size:12px">Новый сезон заменит сохранённый.</p>` : ""}
+    </div>`);
+  }
+
+  private leagueLength(user: number): void {
+    const t = teamById(user);
+    this.set(`<div class="panel narrow">
+      <h2>${t.name}</h2>
+      <p class="tag">${t.city}. Сколько матчей сыграть в регулярном чемпионате? В плей-офф выходят восемь лучших клубов каждой конференции.</p>
+      <div class="btns col">
+        ${SEASON_LENGTHS.map((l) => `<button class="b wide sec" data-len="${l.games}" data-user="${user}">${l.name}</button>`).join("")}
+        <button class="b wide sec" data-act="league-new">Другой клуб</button>
+      </div>
+    </div>`);
+  }
+
+  private tableHtml(season: Season, conf: "west" | "east"): string {
+    const rows = conferenceTable(standings(season), conf);
+    const body = rows
+      .map((r, i) => {
+        const t = teamById(r.id);
+        return `<tr class="${r.id === season.user ? "me" : ""}${i === 7 ? " cut" : ""}"><td>${i + 1}</td><td class="nm"><i class="kit sm" style="--c1:${t.main};--c2:${t.accent}"></i>${t.name}</td><td>${r.gp}</td><td>${r.w}</td><td>${r.otl}</td><td>${r.l}</td><td>${r.gf}-${r.ga}</td><td><b>${r.pts}</b></td></tr>`;
+      })
+      .join("");
+    return `<h3>${CONFERENCE_NAMES[conf]}</h3><table class="tbl"><tr><th></th><th></th><th>И</th><th>В</th><th>ПО</th><th>П</th><th>Ш</th><th>О</th></tr>${body}</table>`;
+  }
+
+  private gamesHtml(season: Season): string {
+    const mine = season.fixtures.filter((f) => f.home === season.user || f.away === season.user);
+    const rows = mine
+      .map((f) => {
+        const home = f.home === season.user;
+        const opp = teamById(home ? f.away : f.home);
+        let res = "";
+        let cls = "";
+        if (f.result) {
+          const userGoals = home ? f.result.hg : f.result.ag;
+          const oppGoals = home ? f.result.ag : f.result.hg;
+          res = `${userGoals}:${oppGoals}${f.result.by === "ot" ? " ОТ" : f.result.by === "so" ? " Б" : ""}`;
+          cls = userGoals > oppGoals ? "win" : f.result.by === "reg" ? "loss" : "otl";
+        }
+        return `<tr class="${f.day === season.day && !f.result ? "next" : ""}"><td>${f.day + 1}</td><td>${home ? "Дома" : "В гостях"}</td><td class="nm"><i class="kit sm" style="--c1:${opp.main};--c2:${opp.accent}"></i>${opp.name}</td><td class="${cls}">${res || "—"}</td></tr>`;
+      })
+      .join("");
+    return `<table class="tbl"><tr><th>День</th><th></th><th></th><th>Счёт</th></tr>${rows}</table>`;
+  }
+
+  private seriesLine(season: Season, x: Series): string {
+    const hi = teamById(x.hi);
+    const lo = teamById(x.lo);
+    const mine = x.hi === season.user || x.lo === season.user;
+    const w = (id: number, name: string) => (x.winner === id ? `<b>${name}</b>` : name);
+    return `<li class="${mine ? "me" : ""}"><span>${w(x.hi, hi.name)}</span><span class="sc">${x.hiWins}–${x.loWins}</span><span>${w(x.lo, lo.name)}</span></li>`;
+  }
+
+  private playoffsHtml(season: Season): string {
+    const po = season.playoffs;
+    if (!po) {
+      const rows = standings(season);
+      const list = (conf: "west" | "east") =>
+        conferenceTable(rows, conf)
+          .slice(0, 8)
+          .map((r) => teamById(r.id).short)
+          .join(" · ");
+      return `<p class="tag">Плей-офф начнётся после регулярного чемпионата. Сейчас в нём были бы:</p><p class="tag"><b>Запад:</b> ${list("west")}<br><b>Восток:</b> ${list("east")}</p>`;
+    }
+    let html = "";
+    const rounds = new Map<number, Series[]>();
+    for (const x of [...po.history, ...po.series]) rounds.set(x.round, [...(rounds.get(x.round) ?? []), x]);
+    for (const [round, list] of [...rounds.entries()].reverse()) {
+      html += `<h3>${ROUND_NAMES[round as 1 | 2 | 3 | 4]}</h3><ul class="series">${list.map((x) => this.seriesLine(season, x)).join("")}</ul>`;
+    }
+    if (po.champion !== null) html = `<p class="champ">Чемпион: ${teamById(po.champion).name}</p>` + html;
+    return html;
+  }
+
+  hub(season: Season): void {
+    this.season = season;
+    const me = teamById(season.user);
+    const rows = standings(season);
+    const place = rows.findIndex((r) => r.id === season.user) + 1;
+    const conf = conferenceTable(rows, me.conference);
+    const confPlace = conf.findIndex((r) => r.id === season.user) + 1;
+    const out = userOutcome(season);
+    let head = "";
+    let card = "";
+    let buttons = "";
+    if (season.phase === "regular") {
+      head = `Регулярный чемпионат · день ${season.day + 1} из ${season.games}`;
+      const f = userFixture(season);
+      if (f) {
+        const home = f.home === season.user;
+        const opp = teamById(home ? f.away : f.home);
+        card = `<div class="next"><span class="lbl">${home ? "Дома" : "В гостях"}</span><i class="kit" style="--c1:${opp.main};--c2:${opp.accent}"></i><b>${opp.name}</b><small>${opp.city} · ${"★".repeat(Math.max(1, Math.min(5, Math.round((strength(opp) - 64) / 5) + 1)))}</small></div>`;
+        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>`;
+      } else {
+        card = `<div class="next"><b>В этот день ваш клуб не играет</b></div>`;
+        buttons = `<button class="b sec" data-act="league-sim-match">Следующий день</button>`;
+      }
+      buttons += `<button class="b sec" data-act="league-sim-days">Пропустить 5 дней</button><button class="b sec" data-act="league-sim-phase">До конца регулярки</button>`;
+    } else if (season.phase === "playoff") {
+      const s = currentSeries(season, season.user);
+      const round = season.playoffs!.round;
+      head = `Плей-офф · ${ROUND_NAMES[round]}`;
+      if (s) {
+        const opp = teamById(s.hi === season.user ? s.lo : s.hi);
+        const home = seriesHome(s) === season.user;
+        const mineW = s.hi === season.user ? s.hiWins : s.loWins;
+        const oppW = s.hi === season.user ? s.loWins : s.hiWins;
+        card = `<div class="next"><span class="lbl">Игра ${seriesGameNumber(s)} · ${home ? "дома" : "в гостях"}</span><i class="kit" style="--c1:${opp.main};--c2:${opp.accent}"></i><b>${opp.name}</b><small>Серия ${mineW}–${oppW}, до четырёх побед</small></div>`;
+        buttons = `<button class="b" data-act="league-play">Играть матч</button><button class="b sec" data-act="league-sim-match">Симулировать матч</button>`;
+      } else {
+        card = `<div class="next"><b>${out.kind === "missed" ? "Ваш клуб не попал в плей-офф" : out.kind === "eliminated" ? `Ваш клуб выбыл: ${ROUND_NAMES[out.round!]}` : "Ждём соперников"}</b></div>`;
+        buttons = `<button class="b sec" data-act="league-sim-match">Следующий день</button>`;
+      }
+      buttons += `<button class="b sec" data-act="league-sim-phase">До конца плей-офф</button>`;
+    } else {
+      head = "Сезон завершён";
+      const champ = teamById(season.playoffs!.champion!);
+      card = `<div class="next champ"><span class="lbl">${CUP_NAME}</span><i class="kit" style="--c1:${champ.main};--c2:${champ.accent}"></i><b>${champ.name}</b><small>${out.kind === "champion" ? "Это ваш клуб!" : out.kind === "missed" ? "Ваш клуб не попал в плей-офф" : `Ваш клуб выбыл: ${ROUND_NAMES[out.round!]}`}</small></div>`;
+      buttons = `<button class="b" data-act="league-new">Новый сезон</button>`;
+    }
+    const tabs: [string, string][] = [["table", "Таблица"], ["games", "Ваши матчи"], ["playoffs", "Плей-офф"]];
+    const body = this.tab === "table" ? this.tableHtml(season, "west") + this.tableHtml(season, "east") : this.tab === "games" ? this.gamesHtml(season) : this.playoffsHtml(season);
+    this.set(`<div class="panel">
+      <div class="row"><i class="kit" style="--c1:${me.main};--c2:${me.accent}"></i><div style="flex:1"><h2 style="margin:0">${me.name}</h2><div class="tag" style="margin:0">${head}${season.phase === "regular" ? ` · ${confPlace}-е место в конференции, ${place}-е в лиге` : ""}</div></div><button class="b sec" data-act="menu">Меню</button></div>
+      ${card}
+      <div class="btns">${buttons}</div>
+      <div class="tabs">${tabs.map(([k, n]) => `<button data-tab="${k}" class="${this.tab === k ? "on" : ""}">${n}</button>`).join("")}</div>
+      <div class="tabbody">${body}</div>
+    </div>`);
+    void compareRows;
   }
 
   private onClick(e: MouseEvent): void {
@@ -190,6 +366,17 @@ export class Screens {
       seg.parentElement!.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === seg));
       return;
     }
+    const tab = t.closest<HTMLElement>("[data-tab]");
+    if (tab && this.season) {
+      this.tab = tab.dataset.tab as "table" | "games" | "playoffs";
+      this.hub(this.season);
+      return;
+    }
+    const len = t.closest<HTMLElement>("[data-len]");
+    if (len) {
+      this.h.leagueNew(Number(len.dataset.user), Number(len.dataset.len) as 21 | 42 | 63);
+      return;
+    }
     const cardEl = t.closest<HTMLElement>("[data-team]");
     if (cardEl && this.pick) {
       const id = Number(cardEl.dataset.team);
@@ -204,6 +391,31 @@ export class Screens {
       case "shootout":
         this.pick = { kind: act, home: null };
         this.chooseTeam(act, 1);
+        break;
+      case "league":
+        this.leagueMenu();
+        break;
+      case "league-open":
+        this.h.leagueOpen();
+        break;
+      case "league-new":
+        this.pick = { kind: "league", home: null };
+        this.chooseTeam("league", 1);
+        break;
+      case "league-play":
+        this.h.leaguePlay();
+        break;
+      case "league-sim-match":
+        this.h.leagueSim("match");
+        break;
+      case "league-sim-days":
+        this.h.leagueSim("days");
+        break;
+      case "league-sim-phase":
+        this.h.leagueSim("phase");
+        break;
+      case "league-continue":
+        this.h.leagueContinue();
         break;
       case "random": {
         const p = this.pick;
@@ -250,6 +462,11 @@ export class Screens {
 
   private onTeam(id: number): void {
     const p = this.pick!;
+    if (p.kind === "league") {
+      this.pick = null;
+      this.leagueLength(id);
+      return;
+    }
     if (p.home === null) {
       p.home = id;
       if (p.kind === "shootout") {

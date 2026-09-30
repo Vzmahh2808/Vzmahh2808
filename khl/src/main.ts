@@ -1,5 +1,18 @@
 import { randomSeed } from "./core/rng";
 import { Sound } from "./audio/sound";
+import {
+  advanceDay,
+  createSeason,
+  currentSeries,
+  loadSeason,
+  resultForUser,
+  saveSeason,
+  seriesHome,
+  simulateDays,
+  simulateToNextPhase,
+  userFixture,
+  type Season,
+} from "./game/league";
 import { LENGTH_SECONDS, DIFFICULTY_VALUES, loadSettings, saveSettings, type Settings } from "./game/settings";
 import { TEAMS, kitsFor, teamById, type Team } from "./game/teams";
 import { Keyboard } from "./input/keyboard";
@@ -25,6 +38,7 @@ view.resize();
 new ResizeObserver(() => view.resize()).observe(canvas);
 window.addEventListener("resize", () => view.resize());
 
+let season: Season | null = loadSeason();
 let match: Match | null = null;
 let cfg: MatchConfig | null = null;
 let teams: [Team, Team] | null = null;
@@ -57,9 +71,69 @@ const screens = new Screens(
       sound.update(0, null);
     },
     settings: (s) => applySettings(s),
+    leagueOpen: () => showHub(),
+    leagueNew: (user, games) => {
+      season = createSeason(user, games, randomSeed());
+      saveSeason(season);
+      screens.hasSeason = true;
+      showHub();
+    },
+    leaguePlay: () => leaguePlay(),
+    leagueSim: (kind) => leagueSim(kind),
+    leagueContinue: () => leagueContinue(),
+    leagueDiscard: () => {
+      season = null;
+      saveSeason(null);
+      screens.hasSeason = false;
+    },
   },
   () => settings,
 );
+screens.hasSeason = season !== null;
+
+function showHub(): void {
+  if (season) screens.hub(season);
+}
+
+function leaguePlay(): void {
+  if (!season) return;
+  if (season.phase === "regular") {
+    const f = userFixture(season);
+    if (!f) return;
+    const home = f.home === season.user;
+    startMatch({ home: season.user, away: home ? f.away : f.home, twoPlayers: false, shootoutOnly: false, league: { mode: "regular", userIsHome: home } });
+  } else if (season.phase === "playoff") {
+    const s = currentSeries(season, season.user);
+    if (!s) return;
+    startMatch({ home: season.user, away: s.hi === season.user ? s.lo : s.hi, twoPlayers: false, shootoutOnly: false, league: { mode: "playoff", userIsHome: seriesHome(s) === season.user } });
+  }
+}
+
+function leagueSim(kind: "match" | "days" | "phase" | "season"): void {
+  if (!season) return;
+  if (kind === "match") advanceDay(season, null);
+  else if (kind === "days") simulateDays(season, 5);
+  else simulateToNextPhase(season);
+  saveSeason(season);
+  showHub();
+}
+
+/** Record the finished match in the season and go back to the hub. */
+function leagueContinue(): void {
+  if (!season || !match || !cfg?.league || match.decidedBy === null) return;
+  const so = match.decidedBy === "so";
+  const userGoals = match.score[0] + (so && match.winner === 0 ? 1 : 0);
+  const oppGoals = match.score[1] + (so && match.winner === 1 ? 1 : 0);
+  const homeId = cfg.league.userIsHome ? season.user : cfg.away;
+  advanceDay(season, resultForUser(season, homeId, userGoals, oppGoals, match.decidedBy));
+  saveSeason(season);
+  match = null;
+  paused = true;
+  hud.hide();
+  document.body.classList.remove("in-match");
+  sound.update(0, null);
+  showHub();
+}
 
 function startMatch(c: MatchConfig): void {
   cfg = c;
@@ -73,7 +147,7 @@ function startMatch(c: MatchConfig): void {
   match = new Match({
     seed: randomSeed(),
     periodSeconds: LENGTH_SECONDS[settings.length],
-    mode: "regular",
+    mode: c.league?.mode ?? "regular",
     humanHome: true,
     humanAway: c.twoPlayers,
     home: home.ratings,
@@ -167,7 +241,7 @@ function frame(now: number): void {
         resultTimer += dt;
         if (resultTimer > 2.4) {
           resultShown = true;
-          screens.result(match, teams!, (id) => hud.playerName(match!, id));
+          screens.result(match, teams!, (id) => hud.playerName(match!, id), cfg?.league !== undefined);
         }
       }
     }

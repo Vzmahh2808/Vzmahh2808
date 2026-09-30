@@ -56,7 +56,7 @@ function steer(s: Skater, w: World, tx: number, ty: number, arrive: number, spri
 }
 
 /** Where a role stands when its team has the puck near `refX` (team-relative). */
-function offenseSlot(team: TeamId, role: Skater["role"], refX: number, refY: number, out: { x: number; y: number }): void {
+export function offenseSlot(team: TeamId, role: Skater["role"], refX: number, refY: number, out: { x: number; y: number }): void {
   const dir = attackDir(team);
   const inZone = refX > 10;
   let rx: number;
@@ -93,14 +93,12 @@ function offenseSlot(team: TeamId, role: Skater["role"], refX: number, refY: num
   out.y = ry;
 }
 
-function defenseSlot(team: TeamId, role: Skater["role"], px: number, py: number, out: { x: number; y: number }): void {
+export function defenseSlot(team: TeamId, role: Skater["role"], px: number, py: number, out: { x: number; y: number }): void {
   const gx = goalX(team);
   const dx = px - gx;
   const d = Math.hypot(dx, py) || 1;
   const ux = dx / d;
   const uy = py / d;
-  const perpX = -uy;
-  const perpY = ux;
   let along: number;
   let lat: number;
   switch (role) {
@@ -117,8 +115,9 @@ function defenseSlot(team: TeamId, role: Skater["role"], px: number, py: number,
       along = clamp(d * 0.62, 8, 20);
       lat = role === "LW" ? -6 : 6;
   }
-  out.x = gx + ux * along + perpX * lat;
-  out.y = uy * along + perpY * lat;
+  // Lateral offsets are plain Y offsets so both teams are exact mirror images.
+  out.x = gx + ux * along;
+  out.y = uy * along + lat;
 }
 
 const slot = { x: 0, y: 0 };

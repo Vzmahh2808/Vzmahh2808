@@ -10,6 +10,7 @@ import type { Ratings } from "../src/sim/state";
   const DTS = Number(process.env.DT ?? 120);
   const agg = { g0: 0, g1: 0, s0: 0, s1: 0, og0: 0, og1: 0, ot: 0, so: 0, hits: 0, zero: 0, max: 0, passes: 0, blocks: 0, saves: 0, held: 0, posts: 0, loose: 0, steps: 0, offZone: 0, home: 0, checks: 0, pokes: 0, pokeOk: 0 };
   const t0 = Date.now();
+  let wins0 = 0;
   const strong: Ratings = { off: 90, def: 85, gk: 90, spd: 85 };
   const weak: Ratings = { off: 60, def: 60, gk: 60, spd: 62 };
   const mode = process.env.SIMMODE ?? "even";
@@ -18,6 +19,12 @@ import type { Ratings } from "../src/sim/state";
     if (mode === "mismatch") {
       s.home = strong;
       s.away = weak;
+    }
+    if (process.env.SIMH && process.env.SIMA) {
+      const h = Number(process.env.SIMH);
+      const a = Number(process.env.SIMA);
+      s.home = { off: h, def: h, gk: h, spd: h };
+      s.away = { off: a, def: a, gk: a, spd: a };
     }
     const m = new Match(s);
     let steps = 0;
@@ -44,6 +51,7 @@ import type { Ratings } from "../src/sim/state";
       }
       steps++;
     }
+    if (m.winner === 0) wins0++;
     agg.g0 += m.score[0];
     agg.g1 += m.score[1];
     agg.s0 += m.stats.shots[0];
@@ -60,6 +68,6 @@ import type { Ratings } from "../src/sim/state";
   const g = (agg.g0 + agg.g1) / n;
   const og = (agg.og0 + agg.og1) / n;
   console.log(
-    `[${mode} dt=1/${DTS}] N=${N} goals/team ${g.toFixed(2)} (home ${(agg.g0 / N).toFixed(2)} away ${(agg.g1 / N).toFixed(2)}) shots/team ${((agg.s0 + agg.s1) / n).toFixed(1)} onGoal/team ${og.toFixed(1)} sv% ${(1 - g / og).toFixed(3)} passes/team ${(agg.passes / n).toFixed(0)} blocks/game ${(agg.blocks / N).toFixed(1)} held ${(agg.held / Math.max(1, agg.saves)).toFixed(2)} posts/game ${(agg.posts / N).toFixed(1)} hits/game ${(agg.hits / N).toFixed(1)} pokes/game ${(agg.pokes / N).toFixed(0)} (ok ${(agg.pokeOk / Math.max(1, agg.pokes)).toFixed(2)}) loose-still ${(agg.loose / agg.steps).toFixed(3)} outsideNeutral ${(agg.offZone / agg.steps).toFixed(2)} OT ${agg.ot} SO ${agg.so} 0:0 ${agg.zero} max ${agg.max} time ${Date.now() - t0}ms`,
+    `home win ${(wins0 / N).toFixed(2)} [${mode} dt=1/${DTS}] N=${N} goals/team ${g.toFixed(2)} (home ${(agg.g0 / N).toFixed(2)} away ${(agg.g1 / N).toFixed(2)}) shots/team ${((agg.s0 + agg.s1) / n).toFixed(1)} onGoal/team ${og.toFixed(1)} sv% ${(1 - g / og).toFixed(3)} passes/team ${(agg.passes / n).toFixed(0)} blocks/game ${(agg.blocks / N).toFixed(1)} held ${(agg.held / Math.max(1, agg.saves)).toFixed(2)} posts/game ${(agg.posts / N).toFixed(1)} hits/game ${(agg.hits / N).toFixed(1)} pokes/game ${(agg.pokes / N).toFixed(0)} (ok ${(agg.pokeOk / Math.max(1, agg.pokes)).toFixed(2)}) loose-still ${(agg.loose / agg.steps).toFixed(3)} outsideNeutral ${(agg.offZone / agg.steps).toFixed(2)} OT ${agg.ot} SO ${agg.so} 0:0 ${agg.zero} max ${agg.max} time ${Date.now() - t0}ms`,
   );
 }
