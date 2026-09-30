@@ -14,7 +14,7 @@ import { knockPed, rejoinNetwork, scare, spawnPeds, stepPed, type Ped, type Thre
 import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
 import { ParticleSystem } from "./fx/particles";
 import { SkidMarks } from "./fx/skids";
-import { Minimap } from "./ui/minimap";
+import { Minimap, type MapIcon, type MapZone } from "./ui/minimap";
 import { Wanted, type Crime } from "./police/wanted";
 import { lineOfSight, makeUnit, nearestIntersection, policeDrive, type PoliceUnit } from "./police/policeAI";
 import { Helicopter } from "./police/helicopter";
@@ -43,6 +43,8 @@ import { copGivesUp, mayReinforce, pursuitTarget } from "./police/search";
 import { THUG_FIRE_RANGE, enemyHitChance, freshBrain, thugIntent, type ThugBrain } from "./police/thugAI";
 import { ALL_HIDEOUTS_BONUS, hideoutMission, hideouts } from "./game/hideouts";
 import { platform } from "./platform";
+import { Drops, dropAmount } from "./game/pickups";
+import { RETRY_TIME, canRetry } from "./game/retry";
 import { AdPolicy, FpsWatch, OFFER_TIME, doubleBonus, revivable } from "./game/ads";
 import { CARGO_POINTS, EXPORT_NAMES, deliverExport, derbyMission, exportDock, exportList, exportRemaining, makeBoatRun } from "./game/sidejobs";
 import { DOCKS, MARINA, POLICE_BOAT_SPAWNS, followRoute, isBoatWater, routeOnWater, type Dock, type RouteFollower } from "./world/water";
@@ -929,6 +931,10 @@ function setPaused(on: boolean): void {
   }
 }
 $("#btn-resume").addEventListener("click", () => setPaused(false));
+$("#btn-map").addEventListener("click", () => {
+  setPaused(false);
+  openMap();
+});
 $("#btn-legend").addEventListener("click", () => {
   const box = $("#legend");
   box.hidden = !box.hidden;
@@ -1060,6 +1066,10 @@ $("#btn-new").addEventListener("click", () => {
   newGame();
 });
 window.addEventListener("keydown", (ev) => {
+  if (mapOpen && (ev.code === "Escape" || ev.code === "KeyN")) {
+    closeMap();
+    return;
+  }
   if (ev.code !== "Escape" || !started) return;
   // Esc closes a shop or workshop menu first, otherwise toggles the pause menu.
   const menu = document.querySelector("#menu");
@@ -1494,6 +1504,7 @@ function fireShot(gun: Gun, from: Shooter): void {
         knockPed(t.ped, dx * 3, dz * 3);
         pedHp.delete(t.ped);
         crime("shootPed", t.x, t.z, false);
+        dropCash(t.x, t.z);
       } else scare(t.ped, { x: ox, z: oz }, 6);
     } else if (t.thug) {
       t.thug.hp -= spec.damage;
@@ -1501,7 +1512,7 @@ function fireShot(gun: Gun, from: Shooter): void {
       if (t.thug.hp <= 0) {
         knockPed(t.thug.ped, dx * 3, dz * 3);
         // Whatever was in his pockets.
-        addMoney(rng.int(20, 60));
+        dropCash(t.x, t.z, rng.int(20, 60));
       }
     } else if (t.cop) {
       t.cop.hp -= spec.damage;
@@ -1578,6 +1589,7 @@ function meleeStrike(spec: WeaponSpec): void {
     if (hp <= 0) {
       knockPed(t.ped, dx * 4, dz * 4);
       pedHp.delete(t.ped);
+      dropCash(t.x, t.z);
     } else scare(t.ped, { x: ox, z: oz }, 6);
     for (const o of peds) if (alive(o) && Math.hypot(o.x - ox, o.z - oz) < 25) scare(o, { x: ox, z: oz }, 5);
     crime("assault", t.x, t.z, true);
@@ -1586,7 +1598,7 @@ function meleeStrike(spec: WeaponSpec): void {
     t.thug.brain.alerted = true;
     if (t.thug.hp <= 0) {
       knockPed(t.thug.ped, dx * 4, dz * 4);
-      addMoney(rng.int(20, 60));
+      dropCash(t.x, t.z, rng.int(20, 60));
     }
   } else if (t.cop) {
     t.cop.hp -= spec.damage;
@@ -1945,6 +1957,7 @@ function addMoney(amount: number): void {
 }
 
 function startMission(m: Mission): void {
+  hideRetry();
   for (const [key, spec] of Object.entries(m.spawns ?? {})) {
     // A wreck from a failed attempt may still sit on the spawn point.
     for (const w of vehicles) {
@@ -2136,6 +2149,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
         break;
       }
       case "fail": {
+        const retryable = canRetry(e.mission.id, !!street, !!taxi);
         endStreetRace();
         // A rigged car goes up with the mission.
         const rigged = e.explode ? missionCars.get(e.explode) : undefined;
@@ -2147,6 +2161,7 @@ function handleMissionEvents(events: MissionEvent[]): void {
         endMission();
         if (taxi) endTaxiShift(e.reason);
         else showBanner(`Провал: ${e.reason}`);
+        if (retryable) offerRetry(e.mission);
         // A failed job is a natural break; a death gets its ad at the respawn instead.
         if (player.dead <= 0) maybeInterstitial();
         break;
@@ -2984,6 +2999,7 @@ function update(dt: number, now: number): void {
   audio.rain(weather.rain);
   radio.update(!!player.vehicle && player.dead === 0 && !audio.muted);
   if (input.justPressed("KeyC")) cameraMode = (cameraMode + 1) % 2;
+  if (input.justPressed("KeyN")) openMap();
   if (input.justPressed("Escape") && touch.enabled) setPaused(true);
   if (input.justPressed("KeyQ") && !player.dead) cycleWeapon();
   // On foot with a gun R reloads; otherwise it changes the station.
@@ -3241,7 +3257,10 @@ function update(dt: number, now: number): void {
       const sp = speedOf(v.state);
       if (sp > 3.5) {
         knockPed(p, v.state.vx, v.state.vz);
-        if (v === player.vehicle) crime("hitPed", p.x, p.z, true);
+        if (v === player.vehicle) {
+          crime("hitPed", p.x, p.z, true);
+          dropCash(p.x, p.z);
+        }
         v.state.vx *= 0.92;
         v.state.vz *= 0.92;
         if (Math.hypot(p.x - player.x, p.z - player.z) < 40) audio.thud();
@@ -3271,6 +3290,8 @@ function update(dt: number, now: number): void {
   updateHideouts();
   managePolice(dt);
   updateMissions(dt);
+  checkWaypoint();
+  collectCash(dt);
 
   recycleTimer -= dt;
   if (recycleTimer <= 0) {
@@ -3491,6 +3512,168 @@ function syncVisuals(dt: number): void {
   flash.intensity *= Math.exp(-dt * 7);
 }
 
+// ---------------------------------------------------------------- full map and waypoint
+
+/** A spot the player marked on the full map; an arrow, a beam and a minimap icon lead there. */
+let waypoint: { x: number; z: number } | null = null;
+const waypointBeam = new BeamMarker(scene, 0xff4d9d, 6);
+const mapEl = $<HTMLDivElement>("#bigmap");
+const mapCanvas = $<HTMLCanvasElement>("#bigmap canvas");
+let mapOpen = false;
+
+function sizeMapCanvas(): void {
+  const r = mapCanvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  mapCanvas.width = Math.max(200, Math.round(r.width * dpr));
+  mapCanvas.height = Math.max(200, Math.round(r.height * dpr));
+}
+
+function drawBigMap(): void {
+  minimap.drawFull(mapCanvas, player.x, player.z, mapData.heading, mapData.dots, mapData.icons, mapData.zones, waypoint);
+}
+
+function openMap(): void {
+  if (!started || mapOpen || player.dead > 0) return;
+  mapOpen = true;
+  paused = true;
+  input.endFrame();
+  hideOffer();
+  mapEl.classList.remove("hidden");
+  sizeMapCanvas();
+  drawBigMap();
+}
+
+function closeMap(): void {
+  if (!mapOpen) return;
+  mapOpen = false;
+  mapEl.classList.add("hidden");
+  paused = false;
+  input.endFrame();
+}
+
+function setWaypoint(w: { x: number; z: number } | null): void {
+  waypoint = w;
+  if (w) waypointBeam.show(w.x, w.z, false);
+  else waypointBeam.hide();
+}
+
+mapCanvas.addEventListener("click", (ev) => {
+  const r = mapCanvas.getBoundingClientRect();
+  const w = minimap.fullToWorld(mapCanvas, ((ev.clientX - r.left) * mapCanvas.width) / r.width, ((ev.clientY - r.top) * mapCanvas.height) / r.height);
+  if (!w) return;
+  // Tapping near the current mark takes it off again.
+  if (waypoint && Math.hypot(waypoint.x - w.x, waypoint.z - w.z) < 25) {
+    setWaypoint(null);
+    showBanner("Метка снята");
+  } else {
+    setWaypoint(w);
+    showBanner("Метка поставлена: стрелка на экране покажет путь");
+  }
+  drawBigMap();
+});
+$("#map-close").addEventListener("click", closeMap);
+$("#map-clear").addEventListener("click", () => {
+  setWaypoint(null);
+  drawBigMap();
+});
+window.addEventListener("resize", () => {
+  if (mapOpen) {
+    sizeMapCanvas();
+    drawBigMap();
+  }
+});
+
+/** The mark is taken off once the player gets there. */
+function checkWaypoint(): void {
+  if (waypoint && player.dead <= 0 && Math.hypot(waypoint.x - player.x, waypoint.z - player.z) < 14) {
+    setWaypoint(null);
+    showBanner("Вы на месте");
+  }
+}
+
+// ---------------------------------------------------------------- retry card and dropped cash
+
+const retryEl = $<HTMLDivElement>("#retry");
+let retryMission: Mission | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hideRetry(): void {
+  retryEl.classList.remove("show");
+  retryMission = null;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+function offerRetry(m: Mission): void {
+  hideRetry();
+  retryMission = m;
+  retryEl.querySelector("span")!.textContent = `«${m.title}» провалено`;
+  retryEl.classList.add("show");
+  retryTimer = setTimeout(hideRetry, RETRY_TIME * 1000);
+}
+
+retryEl.querySelector("[data-retry-yes]")!.addEventListener("click", () => {
+  const m = retryMission;
+  if (!m) return;
+  if (player.dead > 0) {
+    showBanner("Дождитесь возрождения, потом жмите ещё раз");
+    return;
+  }
+  if (runner.active) {
+    hideRetry();
+    return;
+  }
+  hideRetry();
+  startMission(m);
+});
+retryEl.querySelector("[data-retry-no]")!.addEventListener("click", hideRetry);
+
+const drops = new Drops();
+const dropMeshes = new Map<object, THREE.Mesh>();
+const billGeo = new THREE.BoxGeometry(0.6, 0.04, 0.34);
+const billMat = new THREE.MeshStandardMaterial({ color: 0x3fc76b, emissive: 0x1c7a3a, emissiveIntensity: 0.8, roughness: 0.6 });
+
+/** Money falls from a person the player took down. */
+function dropCash(x: number, z: number, amount = dropAmount(rng.next(), rng.next())): void {
+  if (amount <= 0) return;
+  // The bill lands a couple of metres off, so it has to be walked to; beside a wall it stays put.
+  const a = rng.next() * Math.PI * 2;
+  const tx = x + Math.cos(a) * 2.3;
+  const tz = z + Math.sin(a) * 2.3;
+  if (!walkBlock(tx, tz, 0.5) && land(tx, tz) === land(x, z)) {
+    x = tx;
+    z = tz;
+  }
+  const d = drops.add(x, z, amount);
+  const m = new THREE.Mesh(billGeo, billMat);
+  m.position.set(x, ground(x, z) + 0.45, z);
+  m.rotation.y = rng.next() * Math.PI;
+  scene.add(m);
+  dropMeshes.set(d, m);
+  // Anything that fell out of the list to make room loses its mesh.
+  for (const [k, mesh] of dropMeshes) {
+    if (!drops.list.includes(k as (typeof drops.list)[number])) {
+      scene.remove(mesh);
+      dropMeshes.delete(k);
+    }
+  }
+}
+
+function collectCash(dt: number): void {
+  if (player.dead > 0 || hole.hidden) return;
+  const r = drops.step(player.x, player.z, dt);
+  for (const d of [...r.taken, ...r.gone]) {
+    const m = dropMeshes.get(d);
+    if (m) scene.remove(m);
+    dropMeshes.delete(d);
+  }
+  if (r.money > 0) {
+    addMoney(r.money);
+    audio.coin();
+  }
+  for (const [d, m] of dropMeshes) m.rotation.y += dt * 1.5 + ((d as { amount: number }).amount % 3) * 0.002;
+}
+
 /** One line about the ring the player is standing near: what it is and what to do. */
 function nearbyPlaceHint(): string | null {
   const spots: Array<{ x: number; z: number; text: string }> = [
@@ -3524,6 +3707,8 @@ function nearbyPlaceHint(): string | null {
   }
   return best;
 }
+
+let mapData: { dots: Array<{ x: number; z: number; color: string }>; icons: MapIcon[]; zones: MapZone[]; heading: number } = { dots: [], icons: [], zones: [], heading: 0 };
 
 function updateHud(): void {
   const v = player.vehicle;
@@ -3610,10 +3795,12 @@ function updateHud(): void {
   for (const [key, b] of missionBoats) targets[key] = { x: b.state.x, z: b.state.z };
   for (const [key, t] of missionThugs) targets[key] = { x: t.ped.x, z: t.ped.z };
   const goal = runner.active ? runner.objective(targets, player) : null;
-  if (goal) {
+  // With no mission goal, the arrow points at the waypoint the player set on the map.
+  const pointer = goal ?? waypoint;
+  if (pointer) {
     const camYaw = Math.atan2(camLook.z - camPos.z, camLook.x - camPos.x);
-    const rel = Math.atan2(goal.z - player.z, goal.x - player.x) - camYaw;
-    const dist = Math.hypot(goal.x - player.x, goal.z - player.z);
+    const rel = Math.atan2(pointer.z - player.z, pointer.x - player.x) - camYaw;
+    const dist = Math.hypot(pointer.x - player.x, pointer.z - player.z);
     arrowEl.style.display = "flex";
     (arrowEl.firstElementChild as HTMLElement).style.transform = `rotate(${rel}rad)`;
     (arrowEl.lastElementChild as HTMLElement).textContent = `${Math.round(dist)} м`;
@@ -3640,30 +3827,37 @@ function updateHud(): void {
     dots.push({ x: b.state.x, z: b.state.z, color: b === player.boat ? "#ffd32a" : b.police ? (blink ? "#ff3b3b" : "#3b7bff") : b.missionKey ? "#ff7675" : "#81ecec" });
   }
   if (heli.active) dots.push({ x: heli.x, z: heli.z, color: blink ? "#ff3b3b" : "#ffffff" });
-  const icons: Array<{ x: number; z: number; color: string; label: string; clamp?: boolean }> = [
-    { ...PLACES.garage, color: "#7bed9f", label: "Г" },
-    { ...PLACES.paint, color: "#48dbfb", label: "П" },
-    { ...PLACES.shop, color: "#c56cf0", label: "А" },
-    { ...PLACES.gunShop, color: "#e17055", label: "О" },
-    { ...EXPORT_AT, color: "#00b894", label: "Э" },
+  const icons: MapIcon[] = [
+    { ...PLACES.garage, color: "#7bed9f", label: "Г", name: "Гараж" },
+    { ...PLACES.paint, color: "#48dbfb", label: "П", name: "Мастерская" },
+    { ...PLACES.shop, color: "#c56cf0", label: "А", name: "Автосалон" },
+    { ...PLACES.gunShop, color: "#e17055", label: "О", name: "Оружейная" },
+    { ...EXPORT_AT, color: "#00b894", label: "Э", name: "Экспорт машин" },
   ];
   if (!runner.active) {
     const next = nextStory();
-    if (next) icons.push({ ...(next.contact ?? PLACES.contact), color: "#ffd32a", label: "!", clamp: true });
-    icons.push({ ...PLACES.race, color: "#ff9f43", label: "З" });
-    icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д" });
-    icons.push({ ...MARINA, color: "#00d2d3", label: "Л" });
-    for (const h of HIDEOUTS) if (hideoutOpen(h.id)) icons.push({ ...h.at, color: "#d63031", label: "Б" });
-    for (const r of RAMPS) if (!save.stunts.done.includes(r.id)) icons.push({ x: r.x, z: r.z, color: "#fdcb6e", label: "Т" });
+    if (next) icons.push({ ...(next.contact ?? PLACES.contact), color: "#ffd32a", label: "!", name: "Задание", clamp: true });
+    icons.push({ ...PLACES.race, color: "#ff9f43", label: "З", name: "Гонки" });
+    icons.push({ ...PLACES.depot, color: "#e1b12c", label: "Д", name: "Склад: курьер" });
+    icons.push({ ...MARINA, color: "#00d2d3", label: "Л", name: "Пристань" });
+    for (const h of HIDEOUTS) if (hideoutOpen(h.id)) icons.push({ ...h.at, color: "#d63031", label: "Б", name: "Притон банды" });
+    for (const r of RAMPS) if (!save.stunts.done.includes(r.id)) icons.push({ x: r.x, z: r.z, color: "#fdcb6e", label: "Т", name: r.name });
     for (const b of BUSINESSES) {
       const st = stateOf(save.business, b.id);
-      icons.push({ ...b.at, color: !st.owned ? "#a29bfe" : st.raid > 0 ? (blink ? "#ff4757" : "#ffffff") : "#2ecc71", label: st.raid > 0 ? "!" : "$", clamp: st.raid > 0 });
+      icons.push({ ...b.at, color: !st.owned ? "#a29bfe" : st.raid > 0 ? (blink ? "#ff4757" : "#ffffff") : "#2ecc71", label: st.raid > 0 ? "!" : "$", name: st.raid > 0 ? `${b.name}: наезд!` : b.name, clamp: st.raid > 0 });
     }
   }
   const cur = runner.currentStep;
-  if (cur?.kind === "collect") cur.points.forEach((p, i) => !runner.collected[i] && icons.push({ ...p, color: "#55efc4", label: "◆" }));
-  if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", clamp: true });
-  minimap.draw(player.x, player.z, v ? v.state.heading : player.boat ? player.boat.state.heading : player.heading, dots, icons);
+  if (cur?.kind === "collect") cur.points.forEach((p, i) => !runner.collected[i] && icons.push({ ...p, color: "#55efc4", label: "◆", name: "Тайник" }));
+  if (goal) icons.push({ ...goal, color: "#ffd32a", label: "★", name: "Цель задания", clamp: true });
+  if (waypoint) icons.push({ ...waypoint, color: "#ff4d9d", label: "◎", name: "Ваша метка", clamp: true });
+  // The area the police are combing once they have lost the player.
+  const zones: MapZone[] = [];
+  if (wanted.level > 0 && wanted.unseen > 2) zones.push({ x: lastKnown.x, z: lastKnown.z, r: 55, color: "#ff4757" });
+  const heading = v ? v.state.heading : player.boat ? player.boat.state.heading : player.heading;
+  mapData = { dots, icons, zones, heading };
+  minimap.draw(player.x, player.z, heading, dots, icons, zones);
+  if (mapOpen) drawBigMap();
 }
 
 // ---------------------------------------------------------------- loop
@@ -3783,6 +3977,10 @@ if (location.search.includes("debug")) {
     missionThugs,
     exportAt: EXPORT_AT,
     hole,
+    waypoint: () => waypoint,
+    failMission,
+    drops,
+    mapOpen: () => mapOpen,
     isRoad: (x: number, z: number) => isOnCarriageway(layout.n, x, z),
     lastKnown,
     holeVisible: () => holeMesh.visible,

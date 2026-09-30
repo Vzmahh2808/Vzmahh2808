@@ -38,9 +38,21 @@
           <button class="tbtn car" data-key="KeyR">Радио</button>
           <button class="tbtn car job" data-key="KeyJ">Работа</button>
           <button class="tbtn" data-key="KeyC">Камера</button>
+          <button class="tbtn" data-key="KeyN">Карта</button>
         </div>
         <button class="tbtn pausebtn" data-key="Escape" aria-label="Пауза">❚❚</button>
         <div class="rotate-hint">Поверните телефон горизонтально</div>
+      </div>
+      <div id="retry"><span></span><button data-retry-yes>Повторить</button><button data-retry-no class="secondary" aria-label="Нет">✕</button></div>
+      <div id="bigmap" class="hidden">
+        <div class="map-head">
+          <b>Карта</b>
+          <span>Нажмите на карту, чтобы поставить метку. Стрелка на экране покажет путь. Нажмите рядом с меткой, чтобы снять её.</span>
+          <button id="map-clear" class="secondary">Снять метку</button>
+          <button id="map-close">Закрыть (N)</button>
+        </div>
+        <canvas></canvas>
+        <div class="map-foot"><i style="background:#ffd32a"></i>вы <i style="background:#ff4d9d"></i>ваша метка <i style="background:#ff4757"></i>район поиска полиции <i style="background:#3b7bff"></i>полицейские</div>
       </div>
       <div id="offer"><span></span><button data-offer-yes>Смотреть рекламу</button><button data-offer-no class="secondary" aria-label="Нет">✕</button></div>
       <div id="menu" class="hidden"></div>
@@ -66,12 +78,16 @@
               <li><i style="background:#d63031">Б</i><span>Притон банды: уберите бандитов, не уходя далеко от него. Появляется, когда есть оружие.</span></li>
               <li><i style="background:#a29bfe">$</i><span>Бизнес. Фиолетовый — можно купить, зелёный — ваш, приносит деньги каждый час.</span></li>
               <li><i style="background:#ff4757">!</i><span>Красный круг на бизнесе: на него напала банда, приезжайте разбираться.</span></li>
+              <li><i style="background:#ff4d9d">◎</i><span>Ваша метка с большой карты (N). Стрелка на экране показывает путь до неё.</span></li>
+              <li><i style="background:#ff4757">○</i><span>Красный круг на карте: район, где полиция ищет вас после того, как потеряла из виду.</span></li>
+              <li><i style="background:#3fc76b">$</i><span>Зелёная купюра на земле: упала с человека, которого вы сбили. Подберите, пока не сдуло.</span></li>
               <li><i style="background:#fdcb6e">Т</i><span>Трамплин на мини-карте. Разгонитесь и прыгните: за первый прыжок с каждого дают деньги.</span></li>
             </ul>
             <p><b>Звёзды вверху справа</b> — розыск. Одно мелкое нарушение полиция ещё прощает, второе подряд — погоня. Чтобы оторваться, уезжайте от полиции и прячьтесь, пока звёзды не погаснут. Не останавливайтесь рядом с полицейскими: вас задержат.</p>
           </div>
           <div class="start-buttons">
             <button id="btn-resume">Продолжить</button>
+            <button id="btn-map" class="secondary">Карта и метка</button>
             <button id="btn-legend" class="secondary">Что означают круги и значки</button>
             <button id="btn-ad" class="secondary" hidden>Бонус за рекламу</button>
             <button id="btn-sound" class="secondary">Звук</button>
@@ -104,6 +120,7 @@
             <kbd>G (держать)</kbd><span>С лопатой: копать укрытие, где вас не видит полиция</span>
             <kbd>H</kbd><span>Сигнал</span>
             <kbd>C</kbd><span>Сменить камеру</span>
+            <kbd>N</kbd><span>Большая карта: ставьте метку, куда ехать</span>
             <kbd>R</kbd><span>Радио в машине, перезарядка пешком</span>
             <kbd>J</kbd><span>Смена такси (в такси)</span>
             <kbd>M</kbd><span>Звук</span>
