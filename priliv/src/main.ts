@@ -5,13 +5,16 @@ import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildi
 import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, PIER_TOP, clampWorld, generateIsland, landAt } from "./world/island";
 import { buildIslandMeshes } from "./world/islandMesh";
 import { buildCityMeshes } from "./world/cityMesh";
+import { SignalMesh } from "./world/signalMesh";
+import { buildEmbankment } from "./world/embankmentMesh";
+import { embankmentColliders } from "./world/embankment";
 import { buildWalkGraph } from "./world/sidewalks";
-import { CAR_SPECS, CIVILIAN_KINDS, NO_MODS, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
+import { CAR_SPECS, NO_MODS, PARKABLE_KINDS, pickKind, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
 import { beamMaterial, buildCarVisual, flashSiren, syncCarVisual, type CarVisual } from "./entities/carMesh";
 import { animatePedestrian, buildPedestrian, HAIR, PANTS, recolorPedestrian, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
 import { OUTFITS, tryChange } from "./game/outfits";
-import { knockPed, rejoinNetwork, scare, spawnPeds, stepPed, type Ped, type Threat } from "./entities/peds";
+import { FIGHT_DAMAGE, enrage, knockPed, rejoinNetwork, scare, spawnPeds, stepFight, stepPed, type Ped, type Threat } from "./entities/peds";
 import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
 import { ParticleSystem } from "./fx/particles";
 import { SkidMarks } from "./fx/skids";
@@ -93,11 +96,15 @@ const rng = new Rng(seed);
 const layout = generateCity(rng, 8);
 const cityMeshes = buildCityMeshes(layout);
 scene.add(cityMeshes.group);
+const signals = new SignalMesh(layout);
+scene.add(signals.group);
 const walkGraph = buildWalkGraph(layout);
 
 // The port island: its colliders join the city's so every collision check sees them.
 const island = generateIsland(new Rng(seed ^ 0x15));
 layout.buildings.push(...island.colliders);
+layout.buildings.push(...embankmentColliders(layout.half + ROAD_WIDTH / 2 + 30));
+scene.add(buildEmbankment(layout.half + ROAD_WIDTH / 2, layout.half + ROAD_WIDTH / 2 + 30, cityMeshes.lampHeadMaterial));
 const islandMeshes = buildIslandMeshes(island, cityMeshes.lampHeadMaterial);
 scene.add(islandMeshes.group);
 const WORLD_LIMIT = layout.half + ROAD_WIDTH / 2 + 30;
@@ -260,11 +267,11 @@ function recycleAsTraffic(v: Vehicle): void {
 }
 
 for (const p of layout.parking) {
-  if (rng.chance(0.6)) continue;
-  const kind = rng.pick(CIVILIAN_KINDS);
+  if (rng.chance(0.25)) continue;
+  const kind = pickKind(() => rng.next(), PARKABLE_KINDS);
   addVehicle(makeCar(p.x, p.z, p.rot), kind, rng.pick(COLORS), null);
 }
-for (const t of spawnTraffic(rng, layout, 45, COLORS)) addVehicle(t.state, t.kind, t.color, t);
+for (const t of spawnTraffic(rng, layout, 64, COLORS)) addVehicle(t.state, t.kind, t.color, t);
 
 // ---------------------------------------------------------------- police
 
@@ -313,7 +320,7 @@ function spawnGarageCars(): void {
   });
 }
 spawnGarageCars();
-for (const p of island.parking) addVehicle(makeCar(p.x, p.z, p.heading), rng.pick(CIVILIAN_KINDS), rng.pick(COLORS), null);
+for (const p of island.parking) addVehicle(makeCar(p.x, p.z, p.heading), pickKind(() => rng.next(), PARKABLE_KINDS), rng.pick(COLORS), null);
 
 // ---------------------------------------------------------------- atmosphere
 
@@ -455,7 +462,7 @@ function spawnCop(x: number, z: number): void {
   const vis = buildPedestrian(0x1b2d5c, 0x141c33, rng.pick(SKINS), 0x0d0d12);
   vis.group.traverse((o) => (o.castShadow = false));
   scene.add(vis.group);
-  const ped: Ped = { id: -1, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading: 0, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0 };
+  const ped: Ped = { id: -1, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading: 0, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0, brave: false, swing: 0 };
   cops.push({ ped, vis, leaving: false, hp: 100, shootTimer: 1.5 });
 }
 
@@ -713,7 +720,7 @@ const PED_FAR = 120;
 const PED_RECYCLE = 135;
 
 /** Pull a ped from the pool (a gone one, else the farthest) and drop it at (x, z) running from `from`. */
-function emergePed(x: number, z: number, from: { x: number; z: number }): void {
+function emergePed(x: number, z: number, from: { x: number; z: number }, angry = false): void {
   let pick = peds.find((p) => p.state === "gone");
   if (!pick) {
     pick = peds.reduce((a, b) => (Math.hypot(a.x - player.x, a.z - player.z) > Math.hypot(b.x - player.x, b.z - player.z) ? a : b));
@@ -725,7 +732,8 @@ function emergePed(x: number, z: number, from: { x: number; z: number }): void {
   pick.fall = 0;
   pick.state = "walk";
   pick.timer = 0;
-  scare(pick, from, 5);
+  if (angry && pick.brave) enrage(pick);
+  else scare(pick, from, 5);
 }
 
 /** Respawn gone or far-away peds on the network in a ring around the player, so the crowd follows you. */
@@ -1131,7 +1139,7 @@ function enterVehicle(v: Vehicle): void {
   if (v.ai) {
     // Carjack: the driver is thrown out and runs away.
     const door = sideDoor(v.state, 2.2);
-    emergePed(door.x, door.z, { x: player.x, z: player.z });
+    emergePed(door.x, door.z, { x: player.x, z: player.z }, true);
     v.ai = null;
     v.input = { throttle: 0, steer: 0, brake: false, handbrake: false };
   }
@@ -1507,11 +1515,12 @@ function fireShot(gun: Gun, from: Shooter): void {
       const hp = (pedHp.get(t.ped) ?? 100) - spec.damage;
       pedHp.set(t.ped, hp);
       if (hp <= 0) {
+        if (t.ped.state === "fight") showBanner("Победа в драке!");
         knockPed(t.ped, dx * 3, dz * 3);
         pedHp.delete(t.ped);
         crime("shootPed", t.x, t.z, false);
         dropCash(t.x, t.z);
-      } else scare(t.ped, { x: ox, z: oz }, 6);
+      } else hitReaction(t.ped, false);
     } else if (t.thug) {
       t.thug.hp -= spec.damage;
       t.thug.brain.alerted = true;
@@ -1562,6 +1571,13 @@ function cycleWeapon(): void {
   showBanner(weaponId ? WEAPONS[weaponId].name : "Оружие убрано");
 }
 
+/** After a hit that did not kill: the bold turn on the attacker, the rest run. */
+function hitReaction(p: Ped, melee: boolean): void {
+  const hp = pedHp.get(p) ?? 100;
+  if (p.brave && hp > 0 && (melee || rng.chance(0.25))) enrage(p);
+  else scare(p, { x: player.x, z: player.z }, 6);
+}
+
 let swingCooldown = 0;
 /** simTime of the last melee swing, for the arm animation. */
 let lastSwing = -1e9;
@@ -1593,10 +1609,11 @@ function meleeStrike(spec: WeaponSpec): void {
     const hp = (pedHp.get(t.ped) ?? 100) - spec.damage;
     pedHp.set(t.ped, hp);
     if (hp <= 0) {
+      if (t.ped.state === "fight") showBanner("Победа в драке!");
       knockPed(t.ped, dx * 4, dz * 4);
       pedHp.delete(t.ped);
       dropCash(t.x, t.z);
-    } else scare(t.ped, { x: ox, z: oz }, 6);
+    } else hitReaction(t.ped, true);
     for (const o of peds) if (alive(o) && Math.hypot(o.x - ox, o.z - oz) < 25) scare(o, { x: ox, z: oz }, 5);
     crime("assault", t.x, t.z, true);
   } else if (t.thug) {
@@ -1775,7 +1792,7 @@ function spawnThug(x: number, z: number, heading: number, key: string | null, al
   gun.position.set(0, -0.68, 0.04);
   vis.armR.add(gun);
   scene.add(vis.group);
-  const ped: Ped = { id: -2, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0 };
+  const ped: Ped = { id: -2, x, z, y: 0, vx: 0, vy: 0, vz: 0, heading, speed: 0, state: "walk", from: 0, to: 0, timer: 0, fall: 0, walkSpeed: 0, look: 0, brave: false, swing: 0 };
   const t: Thug = { ped, vis, gun, hp: 60, brain: freshBrain(alerted), key };
   thugs.push(t);
   return t;
@@ -1970,6 +1987,8 @@ function parkAmbulance(): void {
   addVehicle(makeCar(lot.x, lot.z, lot.heading), "ambulance", 0xf5f6fa, null);
 }
 parkAmbulance();
+// The fire engine waits beside the ambulance.
+addVehicle(makeCar(PLACES.ambulanceLot.x + 9, PLACES.ambulanceLot.z, PLACES.ambulanceLot.heading), "firetruck", 0xc0392b, null);
 
 function visitHospital(): void {
   parkAmbulance();
@@ -3217,7 +3236,7 @@ function update(dt: number, now: number): void {
       v.input.handbrake = true;
       v.wreckAge += dt;
     }
-    if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt);
+    if (v.ai) driveTraffic(v.ai, layout, rng, obstaclesFor(v), dt, simTime, v.radius / 0.42 / 2);
     if (v.gang && v !== player.vehicle && !s.wrecked && !s.burning) {
       v.input = player.dead > 0 || player.boat ? { throttle: 0, steer: 0, brake: true, handbrake: false } : gangDrive(s, v.gang, layout, playerTarget(), dt);
       hunterGuns(v, dt);
@@ -3328,6 +3347,19 @@ function update(dt: number, now: number): void {
     if (p.state === "gone") continue;
     if (Math.abs(p.x - player.x) > 200 || Math.abs(p.z - player.z) > 200) continue;
     stepPed(p, walkGraph, rng, dt, threats, collidePed);
+    if (p.state === "fight") {
+      const ev = player.dead > 0 ? "quit" : stepFight(p, player.x, player.z, dt, collidePed);
+      if (ev === "quit") {
+        p.state = "walk";
+        p.speed = 0;
+        rejoinNetwork(p, walkGraph, rng);
+      } else if (ev === "hit" && !player.vehicle && !player.dead) {
+        player.health -= FIGHT_DAMAGE;
+        audio.thud();
+        shake = Math.max(shake, 0.2);
+        if (player.health <= 0) killPlayer("Вас забили до смерти");
+      }
+    }
     if (p.state === "down") continue;
     for (const v of vehicles) {
       const dx = p.x - v.state.x;
@@ -3548,6 +3580,7 @@ function syncVisuals(dt: number): void {
     vis.group.position.set(p.x, ground(p.x, p.z) + p.y, p.z);
     vis.group.rotation.y = -p.heading + Math.PI / 2;
     animatePedestrian(vis, p.speed, dt, p.fall);
+    if (p.state === "fight" && p.swing > 0.7) vis.armR.rotation.x = -2.2 + (1.1 - p.swing) * 3;
   }
   for (const c of cops) {
     const p = c.ped;
@@ -3989,6 +4022,7 @@ function frame(now: number): void {
   if (paused) radio.update(false);
   updateCamera(dt);
   syncVisuals(paused ? 0 : dt);
+  signals.update(simTime);
   updateHud();
   const t1 = performance.now();
   renderer.render(scene, camera);
@@ -4071,7 +4105,7 @@ if (location.search.includes("debug")) {
     lastKnown,
     holeVisible: () => holeMesh.visible,
     spawnPursuer,
-    spawnCar: (kind: string, x: number, z: number, heading = 0) => addVehicle(makeCar(x, z, heading), kind, 0xe17055, null),
+    spawnCar: (kind: string, x: number, z: number, heading = 0, color = 0xe17055) => addVehicle(makeCar(x, z, heading), kind, color, null),
     lamps: layout.lamps,
     ads,
     lowQuality: () => lowQuality,

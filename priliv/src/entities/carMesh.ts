@@ -104,9 +104,12 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   const dark = new THREE.MeshStandardMaterial({ color: 0x23262b, roughness: 0.8 });
 
   const vanLike = kind === "van" || kind === "ambulance";
-  const chassisH = vanLike ? 0.7 : 0.55;
+  const big = kind === "bus" || kind === "truck" || kind === "firetruck";
+  const wheelScale = big ? 1.45 : kind === "suv" ? 1.15 : 1;
+  const y0 = big ? 0.68 : kind === "suv" ? 0.55 : 0.45;
+  const chassisH = big ? 0.5 : kind === "suv" ? 0.7 : vanLike ? 0.7 : 0.55;
   const chassis = new THREE.Mesh(new THREE.BoxGeometry(L, chassisH, W), body);
-  chassis.position.y = 0.45 + chassisH / 2;
+  chassis.position.y = y0 + chassisH / 2;
   chassis.castShadow = true;
   shell.add(chassis);
 
@@ -124,17 +127,37 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   } else if (kind === "sport") {
     cabL = L * 0.42;
     cabH = 0.55;
+  } else if (kind === "hatch") {
+    cabL = L * 0.62;
+    cabX = -L * 0.08;
+    cabH = 0.78;
+  } else if (kind === "suv") {
+    cabL = L * 0.64;
+    cabX = -L * 0.1;
+    cabH = 0.85;
+  } else if (kind === "muscle") {
+    cabL = L * 0.36;
+    cabX = -L * 0.12;
+    cabH = 0.5;
+  } else if (kind === "bus") {
+    cabL = L * 0.96;
+    cabX = 0;
+    cabH = 1.5;
+  } else if (kind === "truck" || kind === "firetruck") {
+    cabL = L * 0.26;
+    cabX = L * 0.34;
+    cabH = 1.05;
   }
   const cabin = new THREE.Mesh(new THREE.BoxGeometry(cabL, cabH, W * 0.86), body);
-  cabin.position.set(cabX, 0.45 + chassisH + cabH / 2, 0);
+  cabin.position.set(cabX, y0 + chassisH + cabH / 2, 0);
   cabin.castShadow = true;
   shell.add(cabin);
   const glass = new THREE.Mesh(new THREE.BoxGeometry(cabL * 1.02, cabH * 0.55, W * 0.88), glassMat);
-  glass.position.set(cabX, 0.45 + chassisH + cabH * 0.55, 0);
+  glass.position.set(cabX, y0 + chassisH + cabH * 0.55, 0);
   shell.add(glass);
   if (kind === "pickup") {
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(L * 0.45, 0.3, W * 0.9), dark);
-    bed.position.set(-L * 0.25, 0.45 + chassisH + 0.15, 0);
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(L * y0, 0.3, W * 0.9), dark);
+    bed.position.set(-L * 0.25, y0 + chassisH + 0.15, 0);
     shell.add(bed);
   }
 
@@ -151,10 +174,10 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
   const brake = new THREE.MeshStandardMaterial({ color: 0x660000, emissive: 0xff2020, emissiveIntensity: 0.15 });
   for (const s of [-1, 1]) {
     const hl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.4), head);
-    hl.position.set(L / 2 + 0.02, 0.45 + chassisH * 0.7, s * (W / 2 - 0.35));
+    hl.position.set(L / 2 + 0.02, y0 + chassisH * 0.7, s * (W / 2 - 0.35));
     shell.add(hl);
-    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, 0.45), brake);
-    tl.position.set(-L / 2 - 0.02, 0.45 + chassisH * 0.7, s * (W / 2 - 0.35));
+    const tl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.2, y0), brake);
+    tl.position.set(-L / 2 - 0.02, y0 + chassisH * 0.7, s * (W / 2 - 0.35));
     shell.add(tl);
   }
 
@@ -169,8 +192,9 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
     [-axle, -W / 2],
   ]) {
     const pivot = new THREE.Object3D();
-    pivot.position.set(x, 0.36, z);
+    pivot.position.set(x, 0.36 * wheelScale, z);
     const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.scale.setScalar(wheelScale);
     wheel.castShadow = true;
     wheel.add(new THREE.Mesh(hubGeo, hubMat));
     pivot.add(wheel);
@@ -222,6 +246,74 @@ export function buildCarVisual(kind: string, spec: CarSpec, color: number): CarV
     const blue = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.16, W * 0.34), visual.sirenBlue);
     blue.position.set(cabX, roofY + 0.18, W * 0.19);
     shell.add(red, blue);
+  }
+  if (kind === "bus") {
+    const winMat = new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.2, metalness: 0.3 });
+    const stripe = new THREE.MeshStandardMaterial({ color: 0xf5f6fa, roughness: 0.5 });
+    for (const sgn of [-1, 1]) {
+      const win = new THREE.Mesh(new THREE.BoxGeometry(L * 0.86, 0.7, 0.03), winMat);
+      win.position.set(-L * 0.02, y0 + chassisH + cabH * 0.62, sgn * (W / 2 + 0.01));
+      shell.add(win);
+      const line = new THREE.Mesh(new THREE.BoxGeometry(L * 0.96, 0.14, 0.03), stripe);
+      line.position.set(0, y0 + chassisH + 0.18, sgn * (W / 2 + 0.012));
+      shell.add(line);
+    }
+    const front = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.8, W * 0.86), winMat);
+    front.position.set(L / 2 + 0.01, y0 + chassisH + cabH * 0.62, 0);
+    shell.add(front);
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, W * 0.5), new THREE.MeshStandardMaterial({ color: 0xffd32a, emissive: 0xffa800, emissiveIntensity: 0.6 }));
+    sign.position.set(L / 2 + 0.02, y0 + chassisH + cabH - 0.15, 0);
+    shell.add(sign);
+  }
+  if (kind === "truck") {
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0xdfe6e9, roughness: 0.6 });
+    const cargo = new THREE.Mesh(new THREE.BoxGeometry(L * 0.62, 2.0, W * 0.98), boxMat);
+    cargo.position.set(-L * 0.2, y0 + chassisH + 1.0, 0);
+    cargo.castShadow = true;
+    shell.add(cargo);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(L * 0.5, 0.35, W * 0.99 + 0.02), body);
+    band.position.set(-L * 0.2, y0 + chassisH + 1.0, 0);
+    shell.add(band);
+  }
+  if (kind === "firetruck") {
+    const gear = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.5 });
+    const locker = new THREE.Mesh(new THREE.BoxGeometry(L * 0.6, 1.3, W * 0.96), gear);
+    locker.position.set(-L * 0.2, y0 + chassisH + 0.65, 0);
+    locker.castShadow = true;
+    shell.add(locker);
+    const metal = new THREE.MeshStandardMaterial({ color: 0xb2bec3, roughness: 0.4, metalness: 0.6 });
+    const ladder = new THREE.Mesh(new THREE.BoxGeometry(L * 0.7, 0.12, 0.5), metal);
+    ladder.position.set(-L * 0.16, y0 + chassisH + 1.5, 0);
+    shell.add(ladder);
+    for (const sgn of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(L * 0.7, 0.05, 0.05), metal);
+      rail.position.set(-L * 0.16, y0 + chassisH + 1.62, sgn * 0.25);
+      shell.add(rail);
+    }
+    const white = new THREE.MeshStandardMaterial({ color: 0xf5f6fa, roughness: 0.5 });
+    for (const sgn of [-1, 1]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(L * 0.92, 0.12, 0.02), white);
+      stripe.position.set(0, y0 + chassisH * 0.5, sgn * (W / 2 + 0.01));
+      shell.add(stripe);
+    }
+    visual.sirenRed = new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff1a1a, emissiveIntensity: 0.1 });
+    visual.sirenBlue = new THREE.MeshStandardMaterial({ color: 0x000055, emissive: 0x2a5bff, emissiveIntensity: 0.1 });
+    const r = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, W * 0.34), visual.sirenRed);
+    r.position.set(cabX, y0 + chassisH + cabH + 0.1, -W * 0.19);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.16, W * 0.34), visual.sirenBlue);
+    b.position.set(cabX, y0 + chassisH + cabH + 0.1, W * 0.19);
+    shell.add(r, b);
+  }
+  if (kind === "muscle") {
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xf5f6fa, roughness: 0.4 });
+    for (const dz of [-0.22, 0.22]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(L * 0.98, 0.02, 0.14), stripeMat);
+      stripe.position.set(0, y0 + chassisH + 0.011, dz);
+      shell.add(stripe);
+    }
+    const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.14, 0.5), dark);
+    scoop.position.set(L * 0.28, y0 + chassisH + 0.07, 0);
+    shell.add(scoop);
   }
   if (kind === "ambulance") {
     const roofY = 0.45 + chassisH + cabH;

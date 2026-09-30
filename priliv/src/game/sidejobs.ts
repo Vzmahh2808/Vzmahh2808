@@ -19,6 +19,11 @@ export const EXPORT_PRICES: Record<string, number> = {
   van: 600,
   pickup: 700,
   bike: 650,
+  hatch: 400,
+  suv: 900,
+  muscle: 1300,
+  truck: 1000,
+  bus: 1200,
   sport: 1500,
   police: 2000,
 };
@@ -28,6 +33,11 @@ export const EXPORT_NAMES: Record<string, string> = {
   van: "фургон",
   pickup: "пикап",
   bike: "мотоцикл",
+  hatch: "хэтчбек",
+  suv: "внедорожник",
+  muscle: "маслкар",
+  truck: "грузовик",
+  bus: "автобус",
   sport: "спорткар",
   police: "полицейская машина",
 };

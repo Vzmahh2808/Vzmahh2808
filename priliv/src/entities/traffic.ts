@@ -1,6 +1,7 @@
 import type { Rng } from "../core/rng";
-import { LANE_WIDTH, roadCoord, type CityLayout } from "../world/city";
-import { CIVILIAN_KINDS, forwardSpeed, makeCar, type CarInput, type CarState } from "./carPhysics";
+import { LANE_WIDTH, ROAD_WIDTH, roadCoord, type CityLayout } from "../world/city";
+import { lightFor, signalSpeedLimit } from "../world/signals";
+import { forwardSpeed, makeCar, pickKind, type CarInput, type CarState } from "./carPhysics";
 
 export interface Obstacle {
   x: number;
@@ -60,7 +61,6 @@ function nextIntersection(rng: Rng, n: number, a: TrafficCar["a"], b: TrafficCar
 
 export function spawnTraffic(rng: Rng, layout: CityLayout, count: number, colors: number[]): TrafficCar[] {
   const cars: TrafficCar[] = [];
-  const kinds = [...CIVILIAN_KINDS];
   for (let i = 0; i < count; i++) {
     const a = { ix: rng.int(0, layout.n), iz: rng.int(0, layout.n) };
     const b = nextIntersection(rng, layout.n, { ix: -99, iz: -99 }, a);
@@ -71,7 +71,7 @@ export function spawnTraffic(rng: Rng, layout: CityLayout, count: number, colors
     const f = rng.next() * 0.7 + 0.15;
     const x = ax + (t.x - ax) * f;
     const z = az + (t.z - az) * f;
-    const kind = rng.pick(kinds);
+    const kind = pickKind(() => rng.next());
     const state = makeCar(x, z, Math.atan2(t.dz, t.dx));
     state.vx = Math.cos(state.heading) * 8;
     state.vz = Math.sin(state.heading) * 8;
@@ -81,7 +81,10 @@ export function spawnTraffic(rng: Rng, layout: CityLayout, count: number, colors
 }
 
 /** Decide throttle/steer for one AI car. `obstacles` are everything it should not hit. */
-export function driveTraffic(car: TrafficCar, layout: CityLayout, rng: Rng, obstacles: Obstacle[], dt: number): void {
+/** Distance before the intersection centre where the car's nose should stop at a red. */
+const STOP_LINE = ROAD_WIDTH / 2 + 2;
+
+export function driveTraffic(car: TrafficCar, layout: CityLayout, rng: Rng, obstacles: Obstacle[], dt: number, time?: number, halfLength = 2.2): void {
   const s = car.state;
   const inp = car.input;
   if (car.stunned > 0) {
@@ -128,7 +131,20 @@ export function driveTraffic(car: TrafficCar, layout: CityLayout, rng: Rng, obst
   let target = turning ? TURN_SPEED : CRUISE;
   if (nearest < 12) target = Math.min(target, Math.max(0, (nearest - 3) * 1.2));
   const v = forwardSpeed(s);
-  inp.brake = v > target + 1.5;
+  if (time !== undefined) {
+    // Obey the light at the intersection ahead.
+    const bx = roadCoord(layout.n, car.b.ix);
+    const bz = roadCoord(layout.n, car.b.iz);
+    const toNode = (bx - s.x) * nt.dx + (bz - s.z) * nt.dz;
+    const axis = nt.dx !== 0 ? "x" : "z";
+    const gap = toNode - STOP_LINE - halfLength;
+    if (gap < 40) {
+      const limit = signalSpeedLimit(lightFor(axis, time, car.b.ix, car.b.iz), gap, Math.max(0, v));
+      target = Math.min(target, limit);
+    }
+  }
+  // A car told to stop (a red light, a blocked lane) is held still rather than left to coast.
+  inp.brake = v > target + 1.5 || (target < 1 && v > 0.2);
   inp.throttle = v < target - 0.5 ? 0.8 : 0;
   inp.handbrake = false;
 }

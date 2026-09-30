@@ -46,6 +46,12 @@ export const CAR_SPECS: Record<string, CarSpec> = {
   taxi: { maxSpeed: 44, maxReverse: 10, accel: 9.5, brake: 22, drag: 0.6, steerMax: 0.55, wheelBase: 2.7, grip: 6, handbrakeGrip: 1.2, mass: 1350, length: 4.5, width: 1.9 },
   police: { maxSpeed: 52, maxReverse: 12, accel: 13, brake: 26, drag: 0.55, steerMax: 0.55, wheelBase: 2.7, grip: 6.5, handbrakeGrip: 1.2, mass: 1500, length: 4.6, width: 1.95 },
   pickup: { maxSpeed: 38, maxReverse: 9, accel: 8, brake: 20, drag: 0.7, steerMax: 0.58, wheelBase: 3.0, grip: 5.5, handbrakeGrip: 1.3, mass: 1700, length: 5.0, width: 2.0 },
+  hatch: { maxSpeed: 40, maxReverse: 10, accel: 9.5, brake: 22, drag: 0.6, steerMax: 0.6, wheelBase: 2.4, grip: 6.3, handbrakeGrip: 1.2, mass: 1000, length: 3.7, width: 1.75 },
+  suv: { maxSpeed: 41, maxReverse: 9, accel: 8.5, brake: 21, drag: 0.65, steerMax: 0.55, wheelBase: 2.9, grip: 5.8, handbrakeGrip: 1.3, mass: 1900, length: 4.8, width: 2.0 },
+  muscle: { maxSpeed: 55, maxReverse: 10, accel: 13.5, brake: 24, drag: 0.5, steerMax: 0.5, wheelBase: 2.8, grip: 6.2, handbrakeGrip: 0.9, mass: 1500, length: 4.8, width: 1.95 },
+  bus: { maxSpeed: 27, maxReverse: 6, accel: 4.5, brake: 16, drag: 0.9, steerMax: 0.85, wheelBase: 5.6, grip: 4.5, handbrakeGrip: 1.6, mass: 9000, length: 9.5, width: 2.5 },
+  truck: { maxSpeed: 30, maxReverse: 7, accel: 5, brake: 17, drag: 0.85, steerMax: 0.8, wheelBase: 4.6, grip: 4.8, handbrakeGrip: 1.5, mass: 6500, length: 7.5, width: 2.3 },
+  firetruck: { maxSpeed: 34, maxReverse: 7, accel: 6, brake: 18, drag: 0.8, steerMax: 0.8, wheelBase: 4.8, grip: 5, handbrakeGrip: 1.4, mass: 8000, length: 8.0, width: 2.4 },
   // Ambulance: a heavy van that is quick off the mark; never part of ordinary traffic.
   ambulance: { maxSpeed: 44, maxReverse: 9, accel: 9, brake: 22, drag: 0.7, steerMax: 0.58, wheelBase: 3.2, grip: 5.8, handbrakeGrip: 1.4, mass: 2200, length: 5.3, width: 2.1 },
   // Motorcycle: quick, nimble and slim, so it slips between cars, but it has nothing to hide behind.
@@ -53,7 +59,37 @@ export const CAR_SPECS: Record<string, CarSpec> = {
 };
 
 /** Kinds that appear as ordinary traffic and parked cars. */
-export const CIVILIAN_KINDS = ["sedan", "sport", "van", "pickup", "taxi", "bike"] as const;
+export const CIVILIAN_KINDS = ["sedan", "sport", "van", "pickup", "taxi", "bike", "hatch", "suv", "muscle", "bus", "truck"] as const;
+
+/** How often each kind turns up on the road: family cars everywhere, buses and lorries now and then. */
+export const TRAFFIC_WEIGHTS: Record<(typeof CIVILIAN_KINDS)[number], number> = {
+  sedan: 4,
+  hatch: 4,
+  taxi: 3,
+  suv: 3,
+  van: 2,
+  pickup: 2,
+  bike: 2,
+  sport: 1,
+  muscle: 1,
+  truck: 1,
+  bus: 1,
+};
+
+/** Kinds small enough to sit at the kerb. */
+export const PARKABLE_KINDS = CIVILIAN_KINDS.filter((k) => k !== "bus" && k !== "truck");
+
+/** A weighted draw from `kinds` (default: all traffic). */
+export function pickKind(rand: () => number, kinds: readonly (typeof CIVILIAN_KINDS)[number][] = CIVILIAN_KINDS): string {
+  let total = 0;
+  for (const k of kinds) total += TRAFFIC_WEIGHTS[k];
+  let r = rand() * total;
+  for (const k of kinds) {
+    r -= TRAFFIC_WEIGHTS[k];
+    if (r <= 0) return k;
+  }
+  return kinds[0];
+}
 
 /** Bought upgrades on one car. */
 export interface CarMods {

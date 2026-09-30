@@ -9,7 +9,7 @@ const city = generateCity(new Rng(20260924), 8);
 
 describe("lamp posts and trees", () => {
   it("cover every lamp and every tree", () => {
-    expect(city.posts.length).toBe(city.lamps.length + city.trees.length);
+    expect(city.posts.length).toBe(city.lamps.length + city.trees.length + city.intersections.length * 4);
     expect(city.posts.length).toBeGreaterThan(900);
   });
 
