@@ -1,0 +1,24 @@
+{
+  "latency_ms": 250.0,
+  "fee_rate": null,
+  "vol_annual_init": 0.5,
+  "vol_halflife_s": 300.0,
+  "warmup_s": 3.0,
+  "stop_before_end_s": 15.0,
+  "max_price_age_s": 5.0,
+  "settle_delay_s": 3.0,
+  "strategies": [
+    "taker",
+    "maker",
+    "maker_touch"
+  ],
+  "taker_min_edge": 0.03,
+  "taker_size": 10.0,
+  "taker_max_shares": 100.0,
+  "taker_cooldown_s": 1.0,
+  "maker_half_spread": 0.03,
+  "maker_size": 10.0,
+  "maker_max_shares": 100.0,
+  "maker_max_imbalance": 20.0,
+  "maker_min_pair_edge": 0.02
+}
