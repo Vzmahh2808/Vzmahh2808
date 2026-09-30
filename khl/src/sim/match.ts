@@ -7,7 +7,7 @@ import { shoot } from "./actions";
 import { thinkAI } from "./ai";
 import { DT, stepWorld } from "./physics";
 import { attackDir, goalX, type TeamId } from "./rink";
-import { AVERAGE, goalieHome, goalieId, idleInput, makeWorld, skaterId, type GameEvent, type Ratings, type Role, type Skater, type SkaterInput, type World } from "./state";
+import { AVERAGE, goalieHome, goalieId, idleInput, makeWorld, skaterId, type FoulKind, type GameEvent, type Ratings, type Role, type Skater, type SkaterInput, type World } from "./state";
 
 export type Phase = "faceoff" | "play" | "goal" | "break" | "shootout" | "final";
 export type Decided = "reg" | "ot" | "so";
@@ -22,6 +22,11 @@ export interface MatchSettings {
   home: Ratings;
   away: Ratings;
   difficulty: number;
+  /** Two-minute minors for hits from behind, interference and hooking. */
+  penalties?: boolean;
+  /** Optional per-side override for AI-only matches (tests, balance). */
+  difficultyHome?: number;
+  difficultyAway?: number;
 }
 
 export const defaultSettings = (): MatchSettings => ({
@@ -64,7 +69,20 @@ export interface Stats {
   shots: [number, number];
   onGoal: [number, number];
   hits: [number, number];
+  /** Penalty minutes (game clock). */
+  pim: [number, number];
 }
+
+export interface Penalty {
+  team: TeamId;
+  skater: number;
+  kind: FoulKind;
+  /** Real seconds left, counted while the puck is in play. */
+  left: number;
+}
+
+/** A minor is two game minutes. */
+export const MINOR_GAME_SECONDS = 120;
 
 const FACEOFF_TIME = 1.4;
 const GOAL_TIME = 3.4;
@@ -82,10 +100,11 @@ export class Match {
   phase: Phase = "faceoff";
   phaseTimer = FACEOFF_TIME;
   goals: GoalRecord[] = [];
-  stats: Stats = { shots: [0, 0], onGoal: [0, 0], hits: [0, 0] };
+  stats: Stats = { shots: [0, 0], onGoal: [0, 0], hits: [0, 0], pim: [0, 0] };
   decidedBy: Decided | null = null;
   winner: TeamId | null = null;
   so: Shootout | null = null;
+  penalties: Penalty[] = [];
   /** Every event since the last `drainEvents`, for sound and effects. */
   private outbox: GameEvent[] = [];
   /** Person input per side, copied to the skater they control. */
@@ -99,14 +118,22 @@ export class Match {
     this.settings = settings;
     this.w = makeWorld(settings.seed, settings.home, settings.away);
     this.w.human = [settings.humanHome, settings.humanAway];
-    this.w.difficulty = [settings.difficulty, settings.difficulty];
+    // A person's own teammates play at a neutral level; only the computer's side scales with difficulty.
+    this.w.difficulty = [
+      settings.humanHome ? 0.6 : (settings.difficultyHome ?? settings.difficulty),
+      settings.humanAway ? 0.6 : (settings.difficultyAway ?? settings.difficulty),
+    ];
     for (const s of this.w.skaters) {
       const d = this.w.difficulty[s.team];
       if (!this.w.human[s.team]) {
-        s.shot *= 0.86 + 0.14 * d;
-        s.def *= 0.9 + 0.1 * d;
+        // Easy skates and shoots a little worse, hard a little better than the club's ratings say.
+        s.speed *= 0.88 + 0.22 * d;
+        s.shot *= 0.8 + 0.3 * d;
+        s.def *= 0.85 + 0.25 * d;
+        if (s.role === "G") this.w.ratings[s.team] = { ...this.w.ratings[s.team], gk: this.w.ratings[s.team].gk + (d - 0.6) * 24 };
       }
     }
+    this.w.foulsOn = settings.penalties !== false;
     this.clock = settings.periodSeconds;
     this.setupFaceoff();
   }
@@ -203,7 +230,7 @@ export class Match {
     const w = this.w;
     const threeOnThree = this.inOvertime && this.settings.mode === "regular";
     for (const s of w.skaters) {
-      s.active = s.role === "G" || !threeOnThree || s.role === "C" || s.role === "LD" || s.role === "RD";
+      s.active = (s.role === "G" || !threeOnThree || s.role === "C" || s.role === "LD" || s.role === "RD") && !this.penalties.some((p) => p.skater === s.id);
       s.vel.x = 0;
       s.vel.y = 0;
       s.stun = 0;
@@ -265,7 +292,8 @@ export class Match {
     p.flight = 99;
     w.touches.length = 0;
     for (const team of [0, 1] as TeamId[]) {
-      w.controlled[team] = skaterId(team, "C");
+      const first = w.skaters.find((s) => s.team === team && s.active && s.role !== "G");
+      w.controlled[team] = first ? first.id : skaterId(team, "C");
       this.lastSwitch[team] = w.t;
     }
     this.phase = "faceoff";
@@ -297,6 +325,9 @@ export class Match {
         case "hit":
           this.stats.hits[e.team]++;
           break;
+        case "foul":
+          if (this.phase === "play") this.onFoul(e.team, e.skater, e.kind);
+          break;
         case "goal":
           if (this.phase === "play") this.onGoal(e);
           else if (this.phase === "shootout" && this.so) this.onShootoutGoal(e.team);
@@ -306,7 +337,52 @@ export class Match {
     w.events.length = 0;
   }
 
+  private foulsAllowed(): boolean {
+    return this.w.foulsOn && this.period <= 3 && this.phase === "play";
+  }
+
+  private onFoul(team: TeamId, skater: number, kind: FoulKind): void {
+    if (!this.foulsAllowed()) return;
+    // At most two minors at a time, and never leave a side with fewer than three skaters.
+    const mine = this.penalties.filter((p) => p.team === team);
+    if (mine.length >= 2) return;
+    this.penalties.push({ team, skater, kind, left: MINOR_GAME_SECONDS / this.timeScale });
+    this.stats.pim[team] += 2;
+    this.outbox.push({ type: "whistle" });
+    this.outbox.push({ type: "penalty", team, skater, kind });
+    this.setupFaceoff();
+  }
+
+  /** Count down penalties while the puck is in play; return skaters to the ice. */
+  private tickPenalties(dt: number): void {
+    if (this.penalties.length === 0) return;
+    for (const p of this.penalties) p.left -= dt;
+    const done = this.penalties.filter((p) => p.left <= 0);
+    if (done.length === 0) return;
+    this.penalties = this.penalties.filter((p) => p.left > 0);
+    for (const p of done) this.returnToIce(p.skater);
+  }
+
+  private returnToIce(id: number): void {
+    const s = this.w.skaters[id];
+    const dir = attackDir(s.team);
+    s.active = true;
+    s.pos.x = -dir * 9;
+    s.pos.y = (id % 2 === 0 ? -1 : 1) * 11.6;
+    s.vel.x = 0;
+    s.vel.y = 0;
+    s.heading = dir > 0 ? 0 : Math.PI;
+    s.stun = 0;
+  }
+
   private onGoal(e: Extract<GameEvent, { type: "goal" }>): void {
+    // A power-play goal ends the oldest minor of the side that conceded.
+    const against = this.penalties.filter((p) => p.team !== e.team).length;
+    const forSide = this.penalties.filter((p) => p.team === e.team).length;
+    if (against > forSide) {
+      const i = this.penalties.findIndex((p) => p.team !== e.team);
+      this.penalties.splice(i, 1);
+    }
     this.score[e.team]++;
     this.stats.onGoal[e.team]++;
     const elapsed = (this.settings.periodSeconds - this.clock) * this.timeScale;
@@ -343,6 +419,7 @@ export class Match {
         return;
       }
       if (this.settings.mode === "playoff") {
+        this.penalties = [];
         this.period++;
         this.suddenDeath = true;
         this.clock = this.settings.periodSeconds;
@@ -351,6 +428,7 @@ export class Match {
         return;
       }
       if (this.period === 3) {
+        this.penalties = [];
         this.period = 4;
         this.suddenDeath = true;
         this.clock = this.settings.periodSeconds / 4; // 5:00 of 20:00
@@ -571,6 +649,7 @@ export class Match {
         break;
     }
     this.clock -= dt;
+    this.tickPenalties(dt);
     for (const team of [0, 1] as TeamId[]) this.updateControlled(team);
     thinkAI(w, dt);
     for (const team of [0, 1] as TeamId[]) this.applyHumanInput(team);

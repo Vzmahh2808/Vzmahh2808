@@ -108,7 +108,13 @@ export type GameEvent =
   | { type: "save"; team: TeamId; held: boolean }
   | { type: "goal"; team: TeamId; scorer: number; assist: number[] }
   | { type: "whistle" }
-  | { type: "faceoff" };
+  | { type: "faceoff" }
+  /** A referee-worthy foul by `skater`; the match decides whether to call it. */
+  | { type: "foul"; team: TeamId; skater: number; kind: FoulKind }
+  /** A penalty that was called. */
+  | { type: "penalty"; team: TeamId; skater: number; kind: FoulKind };
+
+export type FoulKind = "interference" | "hooking" | "behind";
 
 export interface World {
   t: number;
@@ -125,6 +131,8 @@ export interface World {
   human: [boolean, boolean];
   /** AI difficulty 0..1 for each team. */
   difficulty: [number, number];
+  /** Whether checks can draw penalties. */
+  foulsOn: boolean;
 }
 
 const ROLES: Role[] = ["C", "LW", "RW", "LD", "RD", "G"];
@@ -207,6 +215,7 @@ export function makeWorld(seed: number, home: Ratings = AVERAGE, away: Ratings =
     controlled: [-1, -1],
     human: [false, false],
     difficulty: [0.6, 0.6],
+    foulsOn: false,
   };
 }
 

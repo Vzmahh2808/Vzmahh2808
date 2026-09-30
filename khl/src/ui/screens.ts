@@ -157,6 +157,7 @@ export class Screens {
       <h2>Настройки</h2>
       <h3>Сложность компьютера</h3>${seg("difficulty", DIFFICULTY_NAMES, s.difficulty)}
       <h3>Длина периода</h3>${seg("length", LENGTH_NAMES, s.length)}
+      <h3>Штрафы (две минуты)</h3>${seg("penalties", ["Включены", "Выключены"], s.penalties ? 0 : 1)}
       <h3>Звук</h3>${seg("muted", ["Включён", "Выключен"], s.muted ? 1 : 0)}
       <h3>Качество графики</h3>${seg("quality", ["Авто", "Высокое", "Низкое"], ["auto", "high", "low"].indexOf(s.quality))}
       <div class="btns"><button class="b" data-act="${fromPause ? "pause" : "menu"}">Готово</button></div>
@@ -361,6 +362,7 @@ export class Screens {
       if (name === "difficulty") s.difficulty = v as 0 | 1 | 2;
       else if (name === "length") s.length = v as 0 | 1 | 2;
       else if (name === "muted") s.muted = v === 1;
+      else if (name === "penalties") s.penalties = v === 0;
       else if (name === "quality") s.quality = (["auto", "high", "low"] as const)[v];
       this.h.settings(s);
       seg.parentElement!.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b === seg));

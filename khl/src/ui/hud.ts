@@ -36,6 +36,7 @@ export class Hud {
   private so = $("#shootout");
   private hintEl = $("#hint");
   private mini = $<HTMLCanvasElement>("#minimap");
+  private pp = $("#pp");
   private bannerTimer = 0;
   private hintTimer = 0;
   private teams: [Team, Team] | null = null;
@@ -102,7 +103,26 @@ export class Hud {
       if (this.hintTimer <= 0) this.hintEl.classList.remove("show");
     }
     this.updateShootout(m);
+    this.updatePenalties(m);
     this.drawMini(m);
+  }
+
+  private updatePenalties(m: Match): void {
+    if (m.penalties.length === 0 || !this.teams) {
+      this.pp.classList.remove("show");
+      return;
+    }
+    const html = m.penalties
+      .map((p) => {
+        const t = this.teams![p.team];
+        return `<span><b>${t.short}</b> ${this.playerName(m, p.skater)} ${formatClock(p.left * m.timeScale)}</span>`;
+      })
+      .join("");
+    if (this.pp.dataset.h !== html) {
+      this.pp.dataset.h = html;
+      this.pp.innerHTML = html;
+    }
+    this.pp.classList.add("show");
   }
 
   private updateShootout(m: Match): void {

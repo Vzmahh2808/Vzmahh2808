@@ -229,6 +229,12 @@ export function check(w: World, s: Skater): void {
       target.pickupCd = 0.6;
     }
     w.events.push({ type: "hit", team: s.team, power });
+    if (w.foulsOn) {
+      // Facing away from the checker: a hit from behind.
+      const away = Math.abs(angleDiff(target.heading, Math.atan2(-ny, -nx)));
+      if (away < 0.7 && closing > 6 && w.rng.next() < 0.45) w.events.push({ type: "foul", team: s.team, skater: s.id, kind: "behind" });
+      else if (!carrier && w.rng.next() < 0.5) w.events.push({ type: "foul", team: s.team, skater: s.id, kind: "interference" });
+    }
     return;
   }
   if (carrier && d < 1.35) {
@@ -244,6 +250,7 @@ export function check(w: World, s: Skater): void {
       s.pickupCd = 0;
     }
     w.events.push({ type: "poke", team: s.team, ok });
+    if (!ok && w.foulsOn && w.rng.next() < 0.035) w.events.push({ type: "foul", team: s.team, skater: s.id, kind: "hooking" });
   }
 }
 

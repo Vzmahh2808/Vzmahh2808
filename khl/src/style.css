@@ -150,3 +150,8 @@ ul.series li span:last-child { text-align: right; }
 ul.series li .sc { color: var(--accent); font-family: var(--mono); text-align: center; }
 ul.series li.me { background: rgba(255, 211, 42, 0.12); }
 .champ { color: var(--accent); font-weight: 800; font-size: 20px; margin: 4px 0 8px; }
+
+#pp { position: absolute; left: 50%; top: 92px; transform: translateX(-50%); display: none; gap: 14px; font-size: 13px; background: rgba(120, 20, 30, 0.82); padding: 3px 12px; border-radius: 999px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#pp.show { display: flex; }
+#pp b { color: #ffd0d0; }
+@media (max-height: 520px) { #pp { top: 74px; } }

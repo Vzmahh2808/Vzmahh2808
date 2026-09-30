@@ -153,6 +153,7 @@ function startMatch(c: MatchConfig): void {
     home: home.ratings,
     away: away.ratings,
     difficulty: DIFFICULTY_VALUES[settings.difficulty],
+    penalties: settings.penalties,
   });
   if (c.shootoutOnly) match.beginShootoutOnly();
   keyboard.twoPlayers = c.twoPlayers;
@@ -211,6 +212,10 @@ function onEvents(m: Match): void {
       const assists = e.assist.map((a) => hud.playerName(m, a).replace(/^№\d+ /, ""));
       const so = m.phase === "shootout";
       hud.say(so ? "ГОЛ!" : `ГОЛ! ${t.short}`, `${name || t.name}${assists.length ? ` (${assists.join(", ")})` : ""}`, 3);
+    } else if (e.type === "penalty") {
+      const t = teams![e.team];
+      const why = e.kind === "behind" ? "Силовой приём сзади" : e.kind === "hooking" ? "Задержка клюшкой" : "Помеха";
+      hud.say("Удаление 2 мин", `${t.short} ${hud.playerName(m, e.skater)} · ${why}`, 3);
     } else if (e.type === "whistle") {
       if (m.phase === "final") hud.say("Конец матча", "", 2.5);
       else if (m.phase === "break") hud.say(m.period === 4 ? "Конец основного времени" : `Конец ${m.period - 1}-го периода`, m.period === 4 ? "Овертайм 3 на 3" : "", 2.2);

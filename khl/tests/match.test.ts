@@ -194,3 +194,116 @@ describe("human control", () => {
     expect(shot).toBe(true);
   });
 });
+
+describe("penalties", () => {
+  const start = (over: Partial<MatchSettings> = {}): Match => {
+    const m = new Match(ai({ seed: 77, ...over }));
+    for (let i = 0; i < 90; i++) m.tick(1 / 60); // through the faceoff
+    m.drainEvents();
+    return m;
+  };
+  const foul = (m: Match, team: 0 | 1, role: "C" | "LW" | "RW" | "LD" | "RD" = "LW") => {
+    m.w.events.push({ type: "foul", team, skater: skaterId(team, role), kind: "hooking" });
+    m.tick(1 / 60);
+  };
+
+  it("a called foul removes the skater for two game minutes and restarts with a faceoff", () => {
+    const m = start();
+    expect(m.phase).toBe("play");
+    foul(m, 0);
+    expect(m.penalties.length).toBe(1);
+    expect(m.w.skaters[skaterId(0, "LW")].active).toBe(false);
+    expect(m.phase).toBe("faceoff");
+    expect(m.stats.pim[0]).toBe(2);
+    expect(m.drainEvents().some((e) => e.type === "penalty")).toBe(true);
+    // Four skaters against five during the power play.
+    for (let i = 0; i < 60 * 2; i++) m.tick(1 / 60);
+    expect(m.w.skaters.filter((s) => s.team === 0 && s.active && s.role !== "G").length).toBe(4);
+    expect(m.w.skaters.filter((s) => s.team === 1 && s.active && s.role !== "G").length).toBe(5);
+    // The minor is 15 real seconds of play at the default period length (120 game seconds).
+    const pen = m.penalties.find((p) => p.skater === skaterId(0, "LW"))!;
+    let playTime = 0;
+    let guard = 0;
+    while (m.penalties.includes(pen) && guard++ < 60 * 120) {
+      const wasPlay = m.phase === "play";
+      m.tick(1 / 60);
+      m.drainEvents();
+      if (wasPlay) playTime += 1 / 60;
+    }
+    expect(playTime).toBeGreaterThan(12);
+    expect(playTime).toBeLessThan(15.5);
+    // Back on the ice unless a fresh penalty was called on the same skater since.
+    const again = m.penalties.some((p) => p.skater === skaterId(0, "LW"));
+    expect(m.w.skaters[skaterId(0, "LW")].active).toBe(again ? false : true);
+  });
+
+  it("allows at most two minors per side at a time", () => {
+    const m = start();
+    foul(m, 1, "LW");
+    for (let i = 0; i < 100; i++) m.tick(1 / 60);
+    foul(m, 1, "RW");
+    for (let i = 0; i < 100; i++) m.tick(1 / 60);
+    foul(m, 1, "LD");
+    expect(m.penalties.filter((p) => p.team === 1).length).toBe(2);
+  });
+
+  it("a power-play goal ends the minor", () => {
+    const m = start();
+    foul(m, 0);
+    for (let i = 0; i < 100; i++) m.tick(1 / 60);
+    expect(m.phase).toBe("play");
+    m.w.events.push({ type: "goal", team: 1, scorer: skaterId(1, "C"), assist: [] });
+    m.tick(1 / 60);
+    expect(m.penalties.length).toBe(0);
+    expect(m.score[1]).toBe(1);
+    for (let i = 0; i < 60 * 6; i++) m.tick(1 / 60);
+    expect(m.w.skaters[skaterId(0, "LW")].active).toBe(true);
+  });
+
+  it("does nothing when penalties are switched off", () => {
+    const m = start({ penalties: false });
+    foul(m, 0);
+    expect(m.penalties.length).toBe(0);
+    expect(m.phase).toBe("play");
+  });
+
+  it("clears penalties for overtime, which is played three on three", () => {
+    const m = start();
+    foul(m, 0);
+    for (let i = 0; i < 100; i++) m.tick(1 / 60);
+    m.period = 3;
+    m.clock = 0.01;
+    m.score = [1, 1];
+    m.tick(1 / 60);
+    expect(m.penalties.length).toBe(0);
+    for (let i = 0; i < 60 * 3; i++) m.tick(1 / 60);
+    expect(m.w.skaters.filter((s) => s.team === 0 && s.active && s.role !== "G").length).toBe(3);
+  });
+
+  it("AI matches produce a hockey-like number of minors", () => {
+    let pim = 0;
+    const n = 4;
+    for (let seed = 1; seed <= n; seed++) {
+      const m = new Match(ai({ seed: seed * 4242 + 1 }));
+      play(m);
+      pim += m.stats.pim[0] + m.stats.pim[1];
+    }
+    const minors = pim / 2 / n / 2; // per team per game
+    expect(minors).toBeGreaterThan(1);
+    expect(minors).toBeLessThan(8);
+  });
+});
+
+describe("difficulty", () => {
+  it("hard beats easy far more often than not", () => {
+    let hardWins = 0;
+    const n = 8;
+    for (let seed = 1; seed <= n; seed++) {
+      const flip = seed % 2 === 0;
+      const m = new Match(ai({ seed: Math.imul(seed + 3, 2654435761) >>> 0, difficultyHome: flip ? 0.2 : 0.9, difficultyAway: flip ? 0.9 : 0.2 }));
+      play(m, 60 * 30, 1 / 120);
+      if (m.winner === (flip ? 1 : 0)) hardWins++;
+    }
+    expect(hardWins).toBeGreaterThanOrEqual(6);
+  });
+});
