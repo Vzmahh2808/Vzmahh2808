@@ -44,6 +44,8 @@ export class View {
   private shake = 0;
   private flash = 0;
   private goalLight = 0;
+  /** +1 or -1: which net the goal light is over. */
+  private goalSide: 1 | -1 = 1;
   private rng = new Rng(99);
   private time = 0;
   private lastHeadings = new Map<number, number>();
@@ -86,6 +88,7 @@ export class View {
         case "goal": {
           this.flash = 1;
           this.goalLight = 3.4;
+          this.goalSide = attackDir(e.team);
           this.shake = Math.max(this.shake, 0.5);
           const kit = this.opts.kits[e.team];
           const x = m.w.puck.pos.x;
@@ -188,14 +191,10 @@ export class View {
       this.goalLight = Math.max(0, this.goalLight - dt);
       const on = Math.floor(this.time * 6) % 2 === 0;
       if (on) {
-        const last = m.goals[m.goals.length - 1];
-        if (last) {
-          const side = attackDir(last.team);
-          ctx.fillStyle = "rgba(255,40,40,0.55)";
-          ctx.beginPath();
-          ctx.arc(side * 27, 0, 2.6, 0, Math.PI * 2);
-          ctx.fill();
-        }
+        ctx.fillStyle = "rgba(255,40,40,0.55)";
+        ctx.beginPath();
+        ctx.arc(this.goalSide * 27, 0, 2.6, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 

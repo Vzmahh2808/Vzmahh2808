@@ -73,6 +73,27 @@ export class Keyboard {
     return codes.some((c) => this.down.has(c));
   }
 
+  private shootDown(team: 0 | 1, touchShoot: boolean): boolean {
+    const keys = team === 0 ? P1 : P2;
+    return this.any(keys.shoot) || (team === 0 && !this.twoPlayers && this.down.has("Period")) || (team === 0 && touchShoot);
+  }
+
+  /**
+   * While play is stopped (faceoff, goal, break), forget one-shot presses and
+   * releases so they do not fire the moment play resumes.
+   */
+  discard(m: Match, touch: { shoot: boolean } | null): void {
+    this.pendingPass = [false, false];
+    this.pendingCheck = [false, false];
+    for (const team of [0, 1] as const) {
+      this.shootWas[team] = this.shootDown(team, touch?.shoot ?? false);
+      const h = m.humanInput[team];
+      h.pass = false;
+      h.check = false;
+      h.shootReleased = false;
+    }
+  }
+
   /** Write the current state into the match inputs. */
   apply(m: Match, touch: { x: number; y: number; sprint: boolean; shoot: boolean; pass: boolean; check: boolean } | null): void {
     for (const team of [0, 1] as const) {
@@ -86,7 +107,7 @@ export class Keyboard {
         my += (this.down.has("ArrowDown") ? 1 : 0) - (this.down.has("ArrowUp") ? 1 : 0);
       }
       let sprint = this.any(keys.sprint);
-      let shoot = this.any(keys.shoot) || (team === 0 && !this.twoPlayers && this.down.has("Period"));
+      let shoot = this.shootDown(team, false);
       if (team === 0 && touch) {
         if (Math.hypot(touch.x, touch.y) > 0.05) {
           mx = touch.x;

@@ -18,8 +18,12 @@ export interface Player {
 
 const ORDER: Role[] = ["C", "LW", "RW", "LD", "RD", "G"];
 
-/** Roster for a club: one player per on-ice role. */
+const cache = new Map<number, Record<Role, Player>>();
+
+/** Roster for a club: one player per on-ice role. Cached: the HUD asks every frame. */
 export function rosterFor(teamId: number): Record<Role, Player> {
+  const hit = cache.get(teamId);
+  if (hit) return hit;
   const rng = new Rng(9000 + teamId * 131);
   const names = rng.shuffle([...SURNAMES]);
   const numbers = new Set<number>();
@@ -31,5 +35,6 @@ export function rosterFor(teamId: number): Record<Role, Player> {
     numbers.add(n);
     out[role] = { number: n, name: names[i] };
   });
+  cache.set(teamId, out);
   return out;
 }

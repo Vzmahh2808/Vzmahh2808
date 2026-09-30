@@ -3,7 +3,7 @@
  * App or on Yandex Games. Each adapter loads its SDK, keeps a cloud copy of the
  * save and, where the platform has them, shows rewarded ads.
  */
-import { chunkKeys, chunkString, detectPlatform, joinChunks, CHUNK_PREFIX, type PlatformName } from "./sync";
+import { chunkKeys, createChunkWriter, detectPlatform, joinChunks, CHUNK_PREFIX, type PlatformName } from "./sync";
 
 export interface Platform {
   name: PlatformName;
@@ -88,6 +88,8 @@ async function telegram(): Promise<Platform> {
   const cloud = tg.isVersionAtLeast?.("6.9") ? tg.CloudStorage : undefined;
   const get = (key: string) => new Promise<string | undefined>((r) => cloud!.getItem(key, (err, v) => r(err ? undefined : v)));
   const getMany = (keys: string[]) => new Promise<Record<string, string>>((r) => cloud!.getItems(keys, (err, v) => r(err || !v ? {} : v)));
+  const set = (key: string, value: string) => new Promise<boolean>((r) => cloud!.setItem(key, value, (err, ok) => r(!err && ok !== false)));
+  const writer = createChunkWriter(set);
   return {
     name: "telegram",
     cloudLoad: async () => {
@@ -98,12 +100,7 @@ async function telegram(): Promise<Platform> {
       return joinChunks(await getMany(keys), count);
     },
     cloudSave: (raw) => {
-      if (!cloud) return;
-      // Chunks first, the count last, so a half-written save is never picked up as whole.
-      const parts = chunkString(raw);
-      const count = parts[`${CHUNK_PREFIX}n`];
-      for (const [k, v] of Object.entries(parts)) if (k !== `${CHUNK_PREFIX}n`) cloud.setItem(k, v);
-      cloud.setItem(`${CHUNK_PREFIX}n`, count);
+      if (cloud) writer(raw);
     },
     rewarded: null,
     interstitial: null,

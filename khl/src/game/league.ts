@@ -326,7 +326,9 @@ export function simulateDays(season: Season, days: number): void {
 /** Simulate until the phase changes (regular to playoff, playoff to done). */
 export function simulateToNextPhase(season: Season): void {
   const phase = season.phase;
-  while (season.phase === phase) advanceDay(season, null);
+  if (phase === "done") return;
+  // A regular season is at most 63 days and a playoff at most 28 rounds of games; the cap is only a safety net.
+  for (let guard = 0; season.phase === phase && guard < 200; guard++) advanceDay(season, null);
 }
 
 export function userAlive(season: Season): boolean {

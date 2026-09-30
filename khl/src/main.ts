@@ -46,6 +46,8 @@ const sessionStart = performance.now();
 const sessionTime = (): number => (performance.now() - sessionStart) / 1000;
 /** A rewarded boost waiting for the next championship match. */
 let boostNext = false;
+/** The boost applied to the match now on the ice; kept when the same match restarts. */
+let matchBoost = false;
 let match: Match | null = null;
 let cfg: MatchConfig | null = null;
 let teams: [Team, Team] | null = null;
@@ -151,7 +153,10 @@ function leagueSim(kind: "match" | "days" | "phase" | "season"): void {
   if (!season) return;
   if (kind === "match") advanceDay(season, null);
   else if (kind === "days") simulateDays(season, 5);
-  else simulateToNextPhase(season);
+  else if (kind === "season") {
+    simulateToNextPhase(season);
+    simulateToNextPhase(season);
+  } else simulateToNextPhase(season);
   saveSeason(season);
   showHub();
 }
@@ -176,8 +181,16 @@ async function leagueContinue(): Promise<void> {
 }
 
 function startMatch(c: MatchConfig): void {
+  if (c.league) {
+    // A fresh league match takes the earned boost; restarting the same match keeps it.
+    if (c !== cfg) {
+      matchBoost = boostNext;
+      boostNext = false;
+    }
+  } else matchBoost = false;
   cfg = c;
   sound.init();
+  sound.setSuspended(false);
   const home = teamById(c.home);
   const away = teamById(c.away);
   teams = [home, away];
@@ -190,7 +203,7 @@ function startMatch(c: MatchConfig): void {
     mode: c.league?.mode ?? "regular",
     humanHome: true,
     humanAway: c.twoPlayers,
-    home: c.league && boostNext ? boosted(home.ratings) : home.ratings,
+    home: c.league && matchBoost ? boosted(home.ratings) : home.ratings,
     away: away.ratings,
     difficulty: DIFFICULTY_VALUES[settings.difficulty],
     penalties: settings.penalties,
@@ -202,7 +215,6 @@ function startMatch(c: MatchConfig): void {
   hud.show(teams, kits);
   screens.hide();
   document.body.classList.add("in-match");
-  if (c.league) boostNext = false;
   paused = false;
   resultShown = false;
   resultTimer = 0;
@@ -258,8 +270,14 @@ function onEvents(m: Match): void {
       const why = e.kind === "behind" ? "Силовой приём сзади" : e.kind === "hooking" ? "Задержка клюшкой" : "Помеха";
       hud.say("Удаление 2 мин", `${t.short} ${hud.playerName(m, e.skater)} · ${why}`, 3);
     } else if (e.type === "whistle") {
+      const playoff = m.settings.mode === "playoff";
       if (m.phase === "final") hud.say("Конец матча", "", 2.5);
-      else if (m.phase === "break") hud.say(m.period === 4 ? "Конец основного времени" : `Конец ${m.period - 1}-го периода`, m.period === 4 ? "Овертайм 3 на 3" : "", 2.2);
+      else if (m.phase === "shootout") hud.say("Серия буллитов", "", 2.2);
+      else if (m.phase === "break") {
+        if (m.period <= 3) hud.say(`Конец ${m.period - 1}-го периода`, "", 2.2);
+        else if (m.period === 4) hud.say("Конец основного времени", playoff ? "Овертайм до гола, пять на пять" : "Овертайм три на три", 2.2);
+        else hud.say("Овертайм продолжается", `ОТ ${m.period - 3}, пять на пять`, 2.2);
+      }
     } else if (e.type === "faceoff") {
       hud.clearBanner();
     }
@@ -276,7 +294,7 @@ function frame(now: number): void {
     if (!paused) {
       const live = match.phase === "play" || match.phase === "shootout";
       if (live) keyboard.apply(match, touch.enabled ? touch.take() : null);
-      else keyboard.clearPending();
+      else keyboard.discard(match, touch.enabled ? touch.take() : null);
       // Sub-step long frames so the physics stays stable.
       const n = Math.max(1, Math.ceil(dt * 120));
       const h = dt / n;

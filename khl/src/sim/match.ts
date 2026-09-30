@@ -496,6 +496,8 @@ export class Match {
     w.puck.beaten = -1;
     w.puck.passTo = -1;
     w.controlled[team] = shooter;
+    w.touches.length = 0;
+    w.touches.push(shooter);
     const att: ShootoutAttempt = { team, shooter, result: "pending" };
     so.attempts.push(att);
     so.current = att;

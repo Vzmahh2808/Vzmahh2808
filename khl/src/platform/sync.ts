@@ -53,3 +53,41 @@ export function joinChunks(values: Record<string, string | undefined>, count: st
   }
   return s;
 }
+
+/**
+ * A cloud writer that never lets a torn save look whole. Chunks are stored one
+ * after another and the count only once every chunk is in. While a write is in
+ * flight, newer saves replace each other in a queue of one, so the newest save
+ * is written next and older ones are dropped.
+ */
+export function createChunkWriter(set: (key: string, value: string) => Promise<boolean>): (raw: string) => void {
+  let writing = false;
+  let queued: string | null = null;
+  const run = async (first: string): Promise<void> => {
+    let raw: string | null = first;
+    while (raw !== null) {
+      const parts = chunkString(raw);
+      const count = parts[`${CHUNK_PREFIX}n`];
+      let ok = true;
+      for (const [k, v] of Object.entries(parts)) {
+        if (k === `${CHUNK_PREFIX}n`) continue;
+        if (!(await set(k, v))) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) await set(`${CHUNK_PREFIX}n`, count);
+      raw = queued;
+      queued = null;
+    }
+    writing = false;
+  };
+  return (raw) => {
+    if (writing) {
+      queued = raw;
+      return;
+    }
+    writing = true;
+    void run(raw);
+  };
+}

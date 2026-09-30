@@ -11,6 +11,8 @@ import type { Skater, World } from "./state";
 
 interface Ctx {
   carrier: Skater | null;
+  /** A goalie holding the puck, if any. */
+  holder: Skater | null;
   /** Skaters of each team in the order they would reach the puck. */
   order: [Skater[], Skater[]];
 }
@@ -231,7 +233,7 @@ function carrierThink(w: World, s: Skater, dt: number): void {
 export function thinkAI(w: World, dt: number): void {
   const p = w.puck;
   const carrier = p.carrier >= 0 ? w.skaters[p.carrier] : null;
-  const ctx: Ctx = { carrier: carrier && carrier.role !== "G" ? carrier : null, order: [[], []] };
+  const ctx: Ctx = { carrier: carrier && carrier.role !== "G" ? carrier : null, holder: carrier && carrier.role === "G" ? carrier : null, order: [[], []] };
   for (const s of w.skaters) {
     if (!s.active || s.role === "G") continue;
     ctx.order[s.team].push(s);
@@ -266,6 +268,13 @@ export function thinkAI(w: World, dt: number): void {
       const sp = Math.hypot(p.vel.x, p.vel.y) || 1;
       const t = clamp(((s.pos.x - p.pos.x) * p.vel.x + (s.pos.y - p.pos.y) * p.vel.y) / (sp * sp), 0, 1.2);
       steer(s, w, p.pos.x + p.vel.x * t, p.pos.y + p.vel.y * t, 1.2, 6);
+      continue;
+    }
+    // A goalie has frozen the puck: his side spreads into breakout lanes, the other side backs into its shape.
+    if (ctx.holder) {
+      if (ctx.holder.team === team) offenseSlot(team, s.role, ctx.holder.pos.x * dir, ctx.holder.pos.y, slot);
+      else defenseSlot(team, s.role, p.pos.x, p.pos.y, slot);
+      steer(s, w, slot.x, slot.y, 2.5, 7);
       continue;
     }
     const oppHas = ctx.carrier !== null && ctx.carrier.team !== team;
