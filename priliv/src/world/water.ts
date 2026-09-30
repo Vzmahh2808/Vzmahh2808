@@ -1,10 +1,10 @@
-import { ISLAND, landAt } from "./island";
+import { ISLAND, RESORT, landAt } from "./island";
 import type { Point } from "../game/missions";
 import { chaseBoat, type BoatInput, type BoatState } from "../entities/boatPhysics";
 
 /** Open water a boat may float on: not land, not a pier, not the bridge, inside the world. */
 export function isBoatWater(x: number, z: number, cityLimit: number): boolean {
-  if (x > ISLAND.x1 + 58 || Math.abs(z) > cityLimit - 2) return false;
+  if (x > ISLAND.x1 + 58 || x < -(cityLimit - 2) || z < -(cityLimit - 2) || z > RESORT.z1 + 68) return false;
   return landAt(x, z, cityLimit) === "water";
 }
 
@@ -21,6 +21,10 @@ export const DOCKS: Dock[] = [
   // City marina, both sides of the pier.
   { kind: "motorboat", color: 0xf5f6fa, x: 284, z: -161.5, heading: 0 },
   { kind: "speedboat", color: 0xe84118, x: 284, z: -146.5, heading: 0 },
+  // Resort marina, one boat each side of the two piers.
+  { kind: "speedboat", color: 0x00cec9, x: -123.5, z: 722, heading: Math.PI / 2 },
+  { kind: "motorboat", color: 0xf5f6fa, x: -108.5, z: 722, heading: Math.PI / 2 },
+  { kind: "speedboat", color: 0xe17055, x: 94.5, z: 722, heading: Math.PI / 2 },
   // Island piers.
   { kind: "motorboat", color: 0x0097e6, x: 455.5, z: -138, heading: -Math.PI / 2 },
   { kind: "speedboat", color: 0xfbc531, x: 515.5, z: -138, heading: -Math.PI / 2 },

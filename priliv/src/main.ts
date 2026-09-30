@@ -2,12 +2,14 @@ import * as THREE from "three";
 import { Rng } from "./core/rng";
 import { Input } from "./core/input";
 import { PITCH, ROAD_WIDTH, generateCity, isOnCarriageway, resolveCircleVsBuildings, resolveCircleVsPosts, roadCoord, surfaceHeight } from "./world/city";
-import { BRIDGE, CAPE, CITY_EAST_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, PIER_TOP, clampWorld, generateIsland, landAt } from "./world/island";
+import { BRIDGE, CAPE, CITY_EAST_SHORE, CITY_SOUTH_SHORE, ISLAND, ISLAND_ROADS, ISLAND_TOP, PIER_TOP, RESORT, RESORT_PIERS, RESORT_ROADS, SOUTH_BRIDGE, clampWorld, generateIsland, landAt } from "./world/island";
 import { buildIslandMeshes } from "./world/islandMesh";
 import { buildCityMeshes } from "./world/cityMesh";
 import { SignalMesh } from "./world/signalMesh";
-import { buildEmbankment } from "./world/embankmentMesh";
-import { embankmentColliders } from "./world/embankment";
+import { buildEmbankment, buildStrip } from "./world/embankmentMesh";
+import { embankmentColliders, southStrip } from "./world/embankment";
+import { RESORT_LOOPS, RESORT_PLACES, generateResort, mergeWalkGraph } from "./world/resort";
+import { buildResortMeshes } from "./world/resortMesh";
 import { buildWalkGraph } from "./world/sidewalks";
 import { CAR_SPECS, NO_MODS, PARKABLE_KINDS, pickKind, armorFactor, collideCar, forwardSpeed, lateralSpeed, makeCar, moddedSpec, separateCars, speedOf, stepCar, type CarInput, type CarMods, type CarState } from "./entities/carPhysics";
 import { applyBlastToCar, blastDamage, conditionOf, stepDamage } from "./entities/damage";
@@ -15,7 +17,7 @@ import { beamMaterial, buildCarVisual, flashSiren, syncCarVisual, type CarVisual
 import { animatePedestrian, buildPedestrian, HAIR, PANTS, recolorPedestrian, SHIRTS, SKINS, type PedVisual } from "./entities/pedestrian";
 import { OUTFITS, tryChange } from "./game/outfits";
 import { FIGHT_DAMAGE, enrage, knockPed, rejoinNetwork, scare, spawnPeds, stepFight, stepPed, type Ped, type Threat } from "./entities/peds";
-import { driveTraffic, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
+import { driveTraffic, spawnLoopCar, spawnTraffic, type Obstacle, type TrafficCar } from "./entities/traffic";
 import { ParticleSystem } from "./fx/particles";
 import { SkidMarks } from "./fx/skids";
 import { Minimap, type MapIcon, type MapZone } from "./ui/minimap";
@@ -107,6 +109,14 @@ layout.buildings.push(...embankmentColliders(layout.half + ROAD_WIDTH / 2 + 30))
 scene.add(buildEmbankment(layout.half + ROAD_WIDTH / 2, layout.half + ROAD_WIDTH / 2 + 30, cityMeshes.lampHeadMaterial));
 const islandMeshes = buildIslandMeshes(island, cityMeshes.lampHeadMaterial);
 scene.add(islandMeshes.group);
+
+// «Лазурный берег», the resort island to the south: solids, lamp posts and palms, walkways, meshes.
+const resort = generateResort(new Rng(seed ^ 0x2e5));
+layout.buildings.push(...resort.colliders);
+layout.posts.push(...resort.posts);
+mergeWalkGraph(walkGraph, resort.walk);
+scene.add(buildResortMeshes(resort, cityMeshes.lampHeadMaterial));
+scene.add(buildStrip(southStrip(layout.half + ROAD_WIDTH / 2 + 30), { from: -(layout.half + ROAD_WIDTH / 2), to: CITY_EAST_SHORE }, cityMeshes.lampHeadMaterial));
 const WORLD_LIMIT = layout.half + ROAD_WIDTH / 2 + 30;
 const land = (x: number, z: number) => landAt(x, z, WORLD_LIMIT);
 const ground = (x: number, z: number) => {
@@ -272,6 +282,13 @@ for (const p of layout.parking) {
   addVehicle(makeCar(p.x, p.z, p.rot), kind, rng.pick(COLORS), null);
 }
 for (const t of spawnTraffic(rng, layout, 64, COLORS)) addVehicle(t.state, t.kind, t.color, t);
+// Moving traffic on the resort: a few cars on each circuit.
+for (const loop of RESORT_LOOPS) {
+  for (let i = 0; i < 4; i++) {
+    const t = spawnLoopCar(rng, loop, (i + rng.next() * 0.5) / 4, ["sedan", "hatch", "taxi", "suv", "sport", "bus"], COLORS);
+    addVehicle(t.state, t.kind, t.color, t);
+  }
+}
 
 // ---------------------------------------------------------------- police
 
@@ -321,6 +338,8 @@ function spawnGarageCars(): void {
 }
 spawnGarageCars();
 for (const p of island.parking) addVehicle(makeCar(p.x, p.z, p.heading), pickKind(() => rng.next(), PARKABLE_KINDS), rng.pick(COLORS), null);
+// The resort's kerbs hold the flashier cars.
+for (const p of resort.parking) addVehicle(makeCar(p.x, p.z, p.heading), rng.pick(["sport", "muscle", "suv", "sedan", "sport", "bike"]), rng.pick(COLORS), null);
 
 // ---------------------------------------------------------------- atmosphere
 
@@ -538,6 +557,11 @@ function standDown(): void {
 }
 
 function spawnPursuer(): void {
+  // Player on the resort: the patrols come over the bridge from its city end.
+  if (player.z > RESORT.z0 - 20) {
+    addVehicle(makeCar(0, roadCoord(layout.n, layout.n) - 40, Math.PI / 2), "police", POLICE_WHITE, null, makeUnit("pursuit"));
+    return;
+  }
   for (let tries = 0; tries < 20; tries++) {
     const ix = rng.int(0, layout.n);
     const iz = rng.int(0, layout.n);
@@ -825,9 +849,11 @@ const input = new Input();
 const audio = new CarAudio();
 const minimap = new Minimap($<HTMLCanvasElement>("#minimap"), layout, {
   maxX: CAPE.x1 + 60,
+  maxZ: RESORT.z1 + 60,
   shoreX: CITY_EAST_SHORE,
-  land: [ISLAND, CAPE, BRIDGE],
-  roads: [...ISLAND_ROADS, BRIDGE],
+  shoreZ: CITY_SOUTH_SHORE,
+  land: [ISLAND, CAPE, BRIDGE, RESORT, SOUTH_BRIDGE, ...RESORT_PIERS],
+  roads: [...ISLAND_ROADS, BRIDGE, SOUTH_BRIDGE, ...RESORT_ROADS],
 });
 const speedEl = $("#speed .num");
 const hintEl = $("#hint");
@@ -2003,6 +2029,44 @@ function visitHospital(): void {
   showBanner(fee > 0 ? `Вас подлатали: −$${fee}` : "Вас подлатали бесплатно");
 }
 
+// ---------------------------------------------------------------- resort hotel
+
+const hotelMarker = new ZoneMarker(scene, 0xffb8d1, "№", 5, "Отель «Лазурь»");
+hotelMarker.show(RESORT_PLACES.hotel.x, RESORT_PLACES.hotel.z);
+
+/** Sleep in a room until `hour`: full health, a save, and a lost tail if the police cannot see the hotel door. */
+function openHotel(): void {
+  const seen = wanted.level > 0 && policeCanSee(player.x, player.z);
+  const stay = (label: string, note: string, price: number, hour: number, done: string): MenuItem => ({
+    label,
+    note,
+    price,
+    action: () => {
+      if (save.money < price) return;
+      if (seen) {
+        showBanner("Полиция у входа: в номер не пустят");
+        return;
+      }
+      addMoney(-price);
+      player.health = 100;
+      clock = hour;
+      const hidden = wanted.level > 0;
+      if (hidden) {
+        wanted.clear();
+        standDown();
+      }
+      persist();
+      closeMenu();
+      audio.coin();
+      showBanner(hidden ? `${done}. Полиция вас потеряла` : done);
+    },
+  });
+  openMenu(seen ? "Отель «Лазурь» (снаружи полиция)" : "Отель «Лазурь»", [
+    stay("Номер до утра", "Полное здоровье, игра сохранится, время — 08:00. Если вас ищут, но не видят, розыск спадёт", 80, 8, "Вы выспались, на часах 08:00"),
+    stay("Отдых до вечера", "Полное здоровье, время — 18:00", 40, 18, "Вы отдохнули, на часах 18:00"),
+  ]);
+}
+
 // ---------------------------------------------------------------- missions, garage, paint shop
 
 const STORY = storyMissions(layout.n);
@@ -2033,7 +2097,7 @@ garageMarker.show(PLACES.garage.x, PLACES.garage.z);
 paintMarker.show(PLACES.paint.x, PLACES.paint.z);
 shopMarker.show(PLACES.shop.x, PLACES.shop.z);
 const PAINT_COST = 150;
-const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, clothes: false, hospital: false, export: false };
+const inside = { contact: false, race: false, regatta: false, garage: false, paint: false, shop: false, depot: false, gunShop: false, clothes: false, hospital: false, hotel: false, export: false };
 let objectiveText = "";
 let briefTimer = 0;
 let autosaveTimer = 20;
@@ -2341,6 +2405,7 @@ function updateMissions(dt: number): void {
   // Ammo is for sale mid-mission too.
   if (entered("gunShop", PLACES.gunShop.x, PLACES.gunShop.z, 4, !v && !player.boat)) openGunShop();
   if (entered("clothes", PLACES.clothes.x, PLACES.clothes.z, 4, !v && !player.boat)) openClothes();
+  if (entered("hotel", RESORT_PLACES.hotel.x, RESORT_PLACES.hotel.z, 5, !v && !player.boat && !runner.active)) openHotel();
   if (entered("hospital", PLACES.hospital.x, PLACES.hospital.z, 5, !v && !player.boat && !runner.active)) visitHospital();
   if (!runner.active && v && entered("depot", PLACES.depot.x, PLACES.depot.z, 6, speedOf(v.state) < 4)) {
     startMission(makeCourierRun(rng, roadPoints, PLACES.depot));
@@ -2594,7 +2659,7 @@ function syncMissionVisuals(dt: number): void {
   }
   syncBusinessMarkers(dt);
   syncHideoutMarkers(dt);
-  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, clothesMarker, hospitalMarker, exportMarker, ...cacheMarkers]) m.update(dt);
+  for (const m of [contactMarker, raceMarker, regattaMarker, garageMarker, paintMarker, goalMarker, holdMarker, shopMarker, depotMarker, gunShopMarker, clothesMarker, hospitalMarker, hotelMarker, exportMarker, ...cacheMarkers]) m.update(dt);
 }
 
 // ---------------------------------------------------------------- businesses
@@ -3794,6 +3859,7 @@ function nearbyPlaceHint(): string | null {
     { ...PLACES.paint, text: "«Мастерская»: заедьте на машине — ремонт, покраска и тюнинг" },
     { ...PLACES.shop, text: "«Автосалон»: подойдите или подъедьте, чтобы купить машину" },
     { ...PLACES.gunShop, text: "«Оружейная»: подойдите пешком, чтобы купить оружие и патроны" },
+    { ...RESORT_PLACES.hotel, text: "Отель «Лазурь»: номер на ночь — здоровье, сохранение, и розыск спадёт, если вас не видят" },
     { ...PLACES.hospital, text: `«Больница»: пешком — лечение за $${HEAL_FEE}. Скорая у входа: сядьте и жмите J, чтобы возить пострадавших` },
     { ...PLACES.clothes, text: "«Лоск»: одежда. Если вас не видит полиция, новый образ снимает розыск" },
     { ...EXPORT_AT, text: `«Экспорт машин»: заедьте на угнанной машине из списка, вам заплатят. Ищут: ${exportWanted()}` },
@@ -3948,6 +4014,7 @@ function updateHud(): void {
     { ...PLACES.paint, color: "#48dbfb", label: "П", name: "Мастерская" },
     { ...PLACES.shop, color: "#c56cf0", label: "А", name: "Автосалон" },
     { ...PLACES.gunShop, color: "#e17055", label: "О", name: "Оружейная" },
+    { ...RESORT_PLACES.hotel, color: "#ffb8d1", label: "№", name: "Отель «Лазурь»" },
     { ...PLACES.hospital, color: "#ff7675", label: "+", name: "Больница" },
     { ...PLACES.clothes, color: "#fd79a8", label: "Н", name: "Одежда" },
     { ...EXPORT_AT, color: "#00b894", label: "Э", name: "Экспорт машин" },
@@ -4054,7 +4121,7 @@ if (location.search.includes("debug")) {
     setWanted: (n: number) => wanted.atLeast(n),
     heli,
     cops,
-    police: () => vehicles.filter((v) => v.police).map((v) => ({ mode: v.police!.mode, x: Math.round(v.state.x), z: Math.round(v.state.z), d: Math.round(Math.hypot(v.state.x - player.x, v.state.z - player.z)), wrecked: v.state.wrecked })),
+    police: () => vehicles.filter((v) => v.police).map((v) => ({ mode: v.police!.mode, x: Math.round(v.state.x), z: Math.round(v.state.z), d: Math.round(Math.hypot(v.state.x - player.x, v.state.z - player.z)), wrecked: v.state.wrecked, sp: +Math.hypot(v.state.vx, v.state.vz).toFixed(1), hd: +v.state.heading.toFixed(2), stuck: +v.police!.stuck.toFixed(1), rev: +v.police!.reverse.toFixed(1), th: v.input.throttle, st: +v.input.steer.toFixed(2), ai: !!v.ai })),
     bust: () => bustTimer,
     flags: debugFlags,
     runner,
@@ -4066,6 +4133,8 @@ if (location.search.includes("debug")) {
     radio,
     save: () => save,
     places: PLACES,
+    resortPlaces: RESORT_PLACES,
+    solidAt: (x: number, z: number, r = 1.9) => ({ b: resolveCircleVsBuildings(layout, x, z, r), p: resolveCircleVsPosts(layout, x, z, r) }),
     missionCars,
     boats,
     missionBoats,

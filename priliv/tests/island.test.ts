@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Rng } from "../src/core/rng";
-import { BRIDGE, LIGHTHOUSE, generateIsland, landAt, onIslandRoad, clampWorld } from "../src/world/island";
+import { BRIDGE, LIGHTHOUSE, RESORT, generateIsland, landAt, onIslandRoad, clampWorld } from "../src/world/island";
 import { generateCity, isOnCarriageway, resolveCircleVsBuildings } from "../src/world/city";
 
 const LIMIT = 278;
@@ -13,7 +13,10 @@ describe("island geography", () => {
     expect(landAt(660, 0, LIMIT)).toBe("island");
     expect(landAt(320, 40, LIMIT)).toBe("water");
     expect(landAt(700, 0, LIMIT)).toBe("water");
-    expect(landAt(0, 400, LIMIT)).toBe("water");
+    expect(landAt(100, 400, LIMIT)).toBe("water");
+    // The south bridge and the resort beyond it.
+    expect(landAt(0, 340, LIMIT)).toBe("bridge");
+    expect(landAt(0, 500, LIMIT)).toBe("island");
   });
 
   it("the bridge starts on the city's east road and ends on island road", () => {
@@ -41,7 +44,7 @@ describe("island geography", () => {
 
   it("clamps to the world edges", () => {
     expect(clampWorld(5000, 0, LIMIT).x).toBeLessThan(800);
-    expect(clampWorld(-5000, 5000, LIMIT)).toEqual({ x: -LIMIT, z: LIMIT });
+    expect(clampWorld(-5000, 5000, LIMIT)).toEqual({ x: -LIMIT, z: RESORT.z1 + 70 });
   });
 });
 

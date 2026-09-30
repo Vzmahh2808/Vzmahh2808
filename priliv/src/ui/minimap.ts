@@ -27,13 +27,13 @@ export class Minimap {
   private base: HTMLCanvasElement;
   private size: number;
 
-  constructor(canvas: HTMLCanvasElement, layout: CityLayout, extras?: { maxX: number; land: Array<{ x0: number; x1: number; z0: number; z1: number }>; roads: Array<{ x0: number; x1: number; z0: number; z1: number }>; shoreX: number }) {
+  constructor(canvas: HTMLCanvasElement, layout: CityLayout, extras?: { maxX: number; maxZ?: number; shoreZ?: number; land: Array<{ x0: number; x1: number; z0: number; z1: number }>; roads: Array<{ x0: number; x1: number; z0: number; z1: number }>; shoreX: number }) {
     this.size = canvas.width;
     this.ctx = canvas.getContext("2d")!;
     const extent = layout.half + ROAD_WIDTH / 2 + 40;
     const maxX = extras ? extras.maxX : extent;
     const pw = Math.ceil((extent + maxX) * SCALE);
-    const ph = Math.ceil(extent * 2 * SCALE);
+    const ph = Math.ceil((extent + (extras?.maxZ ?? extent)) * SCALE);
     this.base = document.createElement("canvas");
     this.base.width = pw;
     this.base.height = ph;
@@ -43,7 +43,7 @@ export class Minimap {
     g.fillStyle = "#1d4660";
     g.fillRect(0, 0, pw, ph);
     g.fillStyle = "#3f6a33";
-    g.fillRect(0, 0, toX(extras ? extras.shoreX : extent), ph);
+    g.fillRect(0, 0, toX(extras ? extras.shoreX : extent), extras?.shoreZ !== undefined ? toZ(extras.shoreZ) : ph);
     if (extras) {
       g.fillStyle = "#5c6168";
       for (const r of extras.land) g.fillRect(toX(r.x0), toZ(r.z0), (r.x1 - r.x0) * SCALE, (r.z1 - r.z0) * SCALE);
